@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { createHash, randomBytes } from 'crypto';
 import { z } from 'zod';
 import { searchSchema, searchKnowledge } from './tools/search.js';
 import { videoSchema, getVideo } from './tools/video.js';
@@ -7,6 +8,7 @@ import { statsSchema, getStats } from './tools/stats.js';
 import { noteSchema, addNote } from './tools/note.js';
 import { backfillEmbeddings } from './tools/embedding.js';
 import { ingestNotionPage, ingestNotionDatabase, setNotionApiKey } from './tools/notion-ingest.js';
+import { dbAdmin } from './db/supabase.js';
 import type { AuthContext } from './types.js';
 
 // Every tool call is scoped to the authenticated user
@@ -148,6 +150,39 @@ export function createMcpServer(auth: AuthContext) {
           type: 'text' as const,
           text: 'Notion API key saved. You can now use ingest_notion_page and ingest_notion_database.'
         }]
+      };
+    }
+  );
+
+  // ── API key management ────────────────────────────────────────────────────────
+
+  server.registerTool(
+    'generate_api_key',
+    {
+      description: 'Generate a personal API key for use with the Obsidian Sync CLI or other integrations. The raw key is shown ONCE — save it immediately. Keys are stored as SHA-256 hashes only.',
+      inputSchema: z.object({
+        label: z.string().optional().describe('Human-readable label (e.g. "Obsidian MacBook")')
+      }),
+      annotations: { readOnlyHint: false, idempotentHint: false }
+    },
+    async (input) => {
+      const raw = 'bt_' + randomBytes(32).toString('hex');
+      const hash = createHash('sha256').update(raw).digest('hex');
+
+      const { error } = await dbAdmin.from('api_keys').insert({
+        user_id: auth.userId,
+        key_hash: hash,
+        label: input.label ?? null,
+      });
+
+      if (error) throw new Error(`Failed to create API key: ${error.message}`);
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `API key created. Save this — it will NOT be shown again:\n\n${raw}\n\nLabel: ${input.label ?? '(none)'}`
+        }],
+        structuredContent: { key: raw, label: input.label ?? null } as unknown as Record<string, unknown>
       };
     }
   );

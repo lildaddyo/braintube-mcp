@@ -1,0 +1,14 @@
+{
+  "name": "braintube-obsidian-sync",
+  "version": "1.0.0",
+  "description": "CLI to sync an Obsidian vault into your BrainTube corpus",
+  "scripts": {
+    "sync": "tsx index.ts",
+    "sync:dry": "tsx index.ts --dry-run"
+  },
+  "dependencies": {
+    "gray-matter": "^4.0.3",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.5"
+  }
+}

@@ -3,6 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createMcpServer } from './server.js';
 import { getAuthContext } from './auth/jwt.js';
+import { handleObsidianSync } from './routes/obsidian-sync.js';
 import type { AuthContext } from './types.js';
 
 const app = express();
@@ -96,10 +97,16 @@ app.get('/mcp-url', requireAuth, (req, res) => {
   });
 });
 
+// ─── Obsidian sync REST endpoint ─────────────────────────────────────────────
+// Auth: Bearer bt_<key> (API key, not JWT)
+// Body: { notes: [{ path, title, content, tags, modified_at }] }
+app.post('/api/obsidian-sync', handleObsidianSync);
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`BrainTube MCP v3 running on port ${PORT}`);
   console.log(`Health:   http://localhost:${PORT}/health`);
   console.log(`MCP:      http://localhost:${PORT}/mcp`);
   console.log(`MCP URL:  http://localhost:${PORT}/mcp-url`);
+  console.log(`Obsidian: http://localhost:${PORT}/api/obsidian-sync`);
 });
