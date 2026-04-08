@@ -71,6 +71,42 @@ export async function embedItem(itemId: string): Promise<void> {
   if (updateError) throw new Error(`embedItem: update failed — ${updateError.message}`);
 }
 
+// ─── Embed a specific list of items in batches ────────────────────────────────
+
+/**
+ * Embed a given list of item IDs, processing in groups of `batchSize` with
+ * 200ms delays between batches. Used by ingest_content and bulk_ingest.
+ * Returns { embedded, errors[] } — never throws.
+ */
+export async function embedItemsBatch(
+  itemIds: string[],
+  batchSize = 20
+): Promise<{ embedded: number; errors: string[] }> {
+  let embedded = 0;
+  const errors: string[] = [];
+
+  for (let i = 0; i < itemIds.length; i += batchSize) {
+    const batch = itemIds.slice(i, i + batchSize);
+
+    await Promise.all(batch.map(async (id) => {
+      try {
+        await embedItem(id);
+        embedded++;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[embed] failed for ${id}:`, msg);
+        errors.push(`${id}: ${msg}`);
+      }
+    }));
+
+    if (i + batchSize < itemIds.length) {
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
+
+  return { embedded, errors };
+}
+
 // ─── Batch backfill ────────────────────────────────────────────────────────────
 
 /**

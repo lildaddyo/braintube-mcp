@@ -27,13 +27,31 @@ async function validateJWT(token: string): Promise<AuthContext | null> {
   }
 }
 
-// API key auth — no user_api_keys table exists yet (research_api_keys is not user-scoped)
-// Returns null always; extend when a proper user_api_keys table is available
-async function validateApiKey(_apiKey: string): Promise<AuthContext | null> {
-  return null;
+// API key auth — looks up bt_... keys in the api_keys table (same table used by obsidian-sync)
+async function validateApiKey(apiKey: string): Promise<AuthContext | null> {
+  if (!apiKey.startsWith('bt_')) return null;
+  try {
+    const { createHash } = await import('crypto');
+    const hash = createHash('sha256').update(apiKey).digest('hex');
+    const { data } = await adminClient
+      .from('api_keys')
+      .select('user_id')
+      .eq('key_hash', hash)
+      .single();
+    if (!data?.user_id) return null;
+    // Fire-and-forget last_used update
+    void adminClient
+      .from('api_keys')
+      .update({ last_used: new Date().toISOString() })
+      .eq('key_hash', hash);
+    console.log('[auth] api key validated');
+    return { userId: data.user_id as string, authMethod: 'apikey' };
+  } catch {
+    return null;
+  }
 }
 
-// Extract and validate auth from request — tries JWT first, then API key header
+// Extract and validate auth from request — tries JWT first, then API key header, then query param
 export async function getAuthContext(req: Request): Promise<AuthContext | null> {
   // Method 1: Authorization: Bearer <jwt>
   const authHeader = req.headers.authorization;
@@ -47,6 +65,15 @@ export async function getAuthContext(req: Request): Promise<AuthContext | null> 
   const apiKey = req.headers['x-braintube-token'] as string | undefined;
   if (apiKey) {
     const ctx = await validateApiKey(apiKey);
+    if (ctx) return ctx;
+  }
+
+  // Method 3: ?token=<jwt> query parameter
+  // For clients that cannot set custom headers (e.g. Claude.ai custom connectors).
+  // The full MCP URL becomes: /mcp?token=<supabase-jwt>
+  const queryToken = (req as Request & { query?: Record<string, string> }).query?.token;
+  if (typeof queryToken === 'string' && queryToken) {
+    const ctx = await validateJWT(queryToken);
     if (ctx) return ctx;
   }
 

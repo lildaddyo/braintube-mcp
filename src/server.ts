@@ -8,6 +8,8 @@ import { statsSchema, getStats } from './tools/stats.js';
 import { noteSchema, addNote } from './tools/note.js';
 import { backfillEmbeddings } from './tools/embedding.js';
 import { ingestNotionPage, ingestNotionDatabase, setNotionApiKey } from './tools/notion-ingest.js';
+import { ingestContentSchema, ingestContent } from './tools/ingest.js';
+import { bulkIngestSchema, bulkIngest } from './tools/bulk-ingest.js';
 import { dbAdmin } from './db/supabase.js';
 import type { AuthContext } from './types.js';
 
@@ -96,12 +98,13 @@ export function createMcpServer(auth: AuthContext) {
     {
       description: 'Ingest a single Notion page into your BrainTube corpus. Accepts a full Notion URL or raw page UUID. Extracts title + body text, upserts to items table, and immediately generates an embedding. Requires set_notion_api_key first.',
       inputSchema: z.object({
-        page_url: z.string().min(1).describe('Notion page URL (e.g. https://notion.so/My-Page-abc123) or raw UUID')
+        page_url:  z.string().min(1).describe('Notion page URL (e.g. https://notion.so/My-Page-abc123) or raw UUID'),
+        force_new: z.boolean().default(false).describe('Skip dedup and always insert as new item')
       }),
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
     async (input) => {
-      const result = await ingestNotionPage(input.page_url, auth.userId);
+      const result = await ingestNotionPage(input.page_url, auth.userId, input.force_new);
       return {
         content: [{
           type: 'text' as const,
@@ -150,6 +153,44 @@ export function createMcpServer(auth: AuthContext) {
           type: 'text' as const,
           text: 'Notion API key saved. You can now use ingest_notion_page and ingest_notion_database.'
         }]
+      };
+    }
+  );
+
+  // ── Manual ingest tools ───────────────────────────────────────────────────────
+
+  server.registerTool(
+    'ingest_content',
+    {
+      description: 'Ingest a single piece of content (note, article, document, etc.) into your BrainTube corpus. Deduplicates by source_url first, then by exact title match. Immediately generates an embedding. Use force_new=true to skip dedup and always insert.',
+      inputSchema: ingestContentSchema,
+      annotations: { readOnlyHint: false, idempotentHint: true }
+    },
+    async (input) => {
+      const result = await ingestContent(input, auth.userId);
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Content ${result.action}: "${result.title}" (id: ${result.id})`
+        }],
+        structuredContent: result as unknown as Record<string, unknown>
+      };
+    }
+  );
+
+  server.registerTool(
+    'bulk_ingest',
+    {
+      description: 'Ingest up to 50 items in a single call. Each item is deduplicated (source_url → title fallback), inserted or updated, then embedded in batches of 20. Daily limit: 500 new items per user. Returns { inserted, updated, skipped, errors[] }.',
+      inputSchema: bulkIngestSchema,
+      annotations: { readOnlyHint: false, idempotentHint: true }
+    },
+    async (input) => {
+      const result = await bulkIngest(input, auth.userId);
+      const summary = `Bulk ingest complete. Inserted: ${result.inserted}, Updated: ${result.updated}, Skipped: ${result.skipped}${result.errors.length ? `\nErrors (${result.errors.length}):\n${result.errors.join('\n')}` : ''}`;
+      return {
+        content: [{ type: 'text' as const, text: summary }],
+        structuredContent: result as unknown as Record<string, unknown>
       };
     }
   );

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { semanticSearch, semanticSearchRpc } from '../db/supabase.js';
+import { semanticSearch, semanticSearchRpc, incrementRetrievalStats } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 
@@ -22,6 +22,8 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
       const semanticResults = await semanticSearchRpc(embedding, userId, limit);
 
       if (semanticResults.length > 0) {
+        // Fire-and-forget retrieval tracking (never delays or fails the search)
+        void incrementRetrievalStats(semanticResults.map(r => r.id));
         // RPC doesn't return taint_level — default to 0 (conservative, safe for display)
         const withTaintDefault = semanticResults.map(r => ({ ...r, taint_level: 0 }));
         const tainted = wrapWithTaint(withTaintDefault);
@@ -48,6 +50,9 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
       }]
     };
   }
+
+  // Fire-and-forget retrieval tracking
+  void incrementRetrievalStats(ilikeResults.map(r => r.id));
 
   const withMatchType = ilikeResults.map(r => ({ ...r, match_type: 'keyword' as const }));
   const tainted = wrapWithTaint(withMatchType as Array<{ taint_level?: number }>);

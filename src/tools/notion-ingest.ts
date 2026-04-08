@@ -5,6 +5,7 @@ import type {
   PageObjectResponse
 } from '@notionhq/client/build/src/api-endpoints.js';
 import { dbAdmin } from '../db/supabase.js';
+import { findItemBySourceUrl, findItemByTitle } from '../db/supabase.js';
 import { embedItem } from './embedding.js';
 
 // ─── Notion client factory ────────────────────────────────────────────────────
@@ -136,7 +137,8 @@ function getPageTitle(page: PageObjectResponse): string {
 
 export async function ingestNotionPage(
   pageUrl: string,
-  userId: string
+  userId: string,
+  forceNew = false
 ): Promise<{ id: string; title: string; action: 'inserted' | 'updated' }> {
   const notion = await getNotionClient(userId);
   const pageId = extractPageId(pageUrl);
@@ -154,18 +156,34 @@ export async function ingestNotionPage(
   const summary = bodyText.slice(0, 500) || null;
   const pageUrlNormalized = `https://www.notion.so/${pageId.replace(/-/g, '')}`;
 
-  // Check if already ingested
-  const { data: existing } = await dbAdmin
-    .from('items')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('notion_page_id', pageId)
-    .single();
+  // ── Dedup: notion_page_id first, then source_url, then title ─────────────
+  let existingId: string | null = null;
+
+  if (!forceNew) {
+    // 1. Canonical: match by notion_page_id (most reliable for Notion pages)
+    const { data: byPageId } = await dbAdmin
+      .from('items')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('notion_page_id', pageId)
+      .single();
+    existingId = byPageId?.id ?? null;
+
+    // 2. Fallback: source_url match (catches pages re-ingested without notion_page_id)
+    if (!existingId) {
+      existingId = await findItemBySourceUrl(pageUrlNormalized, userId);
+    }
+
+    // 3. Fallback: exact title match
+    if (!existingId) {
+      existingId = await findItemByTitle(title, userId);
+    }
+  }
 
   let itemId: string;
   let action: 'inserted' | 'updated';
 
-  if (existing) {
+  if (existingId) {
     // Update existing item
     const { error } = await dbAdmin
       .from('items')
@@ -175,10 +193,10 @@ export async function ingestNotionPage(
         source_url: pageUrlNormalized,
         updated_at: new Date().toISOString()
       })
-      .eq('id', existing.id);
+      .eq('id', existingId);
 
     if (error) throw new Error(`Failed to update notion item: ${error.message}`);
-    itemId = existing.id;
+    itemId = existingId;
     action = 'updated';
   } else {
     // Insert new item — generate UUID via crypto

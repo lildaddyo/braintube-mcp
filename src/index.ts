@@ -4,10 +4,33 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createMcpServer } from './server.js';
 import { getAuthContext } from './auth/jwt.js';
 import { handleObsidianSync } from './routes/obsidian-sync.js';
+import { oauthRouter } from './routes/oauth.js';
+import { ingestContent } from './tools/ingest.js';
+import { summariseConversation } from './tools/summarise.js';
 import type { AuthContext } from './types.js';
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: false })); // needed for OAuth login form POST
+
+// ─── CORS for browser extension and dashboard origins ─────────────────────────
+app.use((req, res, next) => {
+  const origin = req.headers.origin ?? '';
+  // Allow chrome/firefox extensions and the BrainTube web app
+  if (
+    origin.startsWith('chrome-extension://') ||
+    origin.startsWith('moz-extension://') ||
+    origin === 'https://brain-tube.com' ||
+    origin === 'https://www.brain-tube.com'
+  ) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-BrainTube-Token');
+    res.setHeader('Access-Control-Max-Age', '86400');
+  }
+  if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
+  next();
+});
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 
@@ -35,13 +58,18 @@ async function requireAuth(
   if (!auth) {
     res.status(401).json({
       error: 'Unauthorized',
-      message: 'Provide a valid BrainTube JWT via Authorization: Bearer <token> or X-BrainTube-Token header'
+      message: 'Provide a valid BrainTube JWT via: (1) Authorization: Bearer <token> header, (2) X-BrainTube-Token header, or (3) ?token=<jwt> query parameter'
     });
     return;
   }
   (req as express.Request & { auth: AuthContext }).auth = auth;
   next();
 }
+
+// ─── OAuth 2.0 Authorization Server ──────────────────────────────────────────
+// Handles /.well-known/oauth-authorization-server, /oauth/register,
+// /oauth/authorize (GET login form + POST submit), /oauth/token
+app.use(oauthRouter);
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
@@ -81,20 +109,84 @@ app.get('/mcp-url', requireAuth, (req, res) => {
     : `http://localhost:${PORT}`;
 
   const mcpUrl = `${baseUrl}/mcp`;
+  const mcpUrlWithToken = `${baseUrl}/mcp?token=<your-supabase-token>`;
 
   // Log auth method for debugging (never log the JWT itself or userId)
   console.log(`[mcp-url] request — method: ${auth.authMethod}, email: ${auth.email ?? 'unknown'}`);
 
   res.json({
     mcp_url: mcpUrl,
-    auth_method: 'header',
+    auth_method: 'oauth2_or_query_param',
     instructions: {
-      claude_ai: `Add ${mcpUrl} as a custom connector. Set header: Authorization: Bearer <your-supabase-token>`,
+      // Claude.ai supports native MCP OAuth — user clicks Connect, logs in once,
+      // tokens refresh silently forever. No manual token pasting needed.
+      claude_ai: `Add ${mcpUrl} as a custom connector. Claude.ai will show a Connect button and handle OAuth automatically.`,
+      // Fallback for clients that support headers (Claude Code, Cursor, Gemini CLI)
       claude_code: `claude mcp add --transport http braintube ${mcpUrl} --header "Authorization: Bearer <your-supabase-token>"`,
       cursor: `{ "url": "${mcpUrl}", "headers": { "Authorization": "Bearer <your-supabase-token>" } }`,
-      gemini_cli: `{ "mcpServers": { "braintube": { "url": "${mcpUrl}", "headers": { "Authorization": "Bearer <your-supabase-token>" } } } }`
+      gemini_cli: `{ "mcpServers": { "braintube": { "url": "${mcpUrl}", "headers": { "Authorization": "Bearer <your-supabase-token>" } } } }`,
+      // Legacy fallback — still works but requires manual refresh every hour
+      claude_ai_legacy: `Add ${mcpUrlWithToken} as a connector URL (manual token, expires hourly).`,
     }
   });
+});
+
+// ─── Chrome extension ingest endpoint ────────────────────────────────────────
+// Auth: Bearer <supabase-jwt>
+// Body: { conversation_text, source_url, source_type, page_title? }
+// Server summarises via ANTHROPIC_API_KEY, then stores the digest.
+// Users need zero configuration — no API keys in the extension.
+app.post('/api/extension-ingest', requireAuth, mcpRateLimit, async (req, res) => {
+  const auth = (req as express.Request & { auth: AuthContext }).auth;
+  const { conversation_text, source_url, source_type, page_title } = req.body as {
+    conversation_text?: string;
+    source_url?: string;
+    source_type?: string;
+    page_title?: string;
+  };
+
+  if (!conversation_text || typeof conversation_text !== 'string' || conversation_text.trim().length < 50) {
+    res.status(400).json({ error: 'conversation_text is required and must be at least 50 characters' });
+    return;
+  }
+
+  const allowedTypes = [
+    'note', 'manual', 'article', 'web', 'document', 'pdf', 'ebook',
+    'research_paper', 'work', 'reddit', 'medium', 'substack', 'github',
+    'notion', 'chatgpt', 'claude', 'gemini', 'wikipedia'
+  ] as const;
+  type AllowedType = typeof allowedTypes[number];
+  const resolvedType: AllowedType = allowedTypes.includes(source_type as AllowedType)
+    ? (source_type as AllowedType)
+    : 'manual';
+
+  try {
+    // Summarise server-side — ANTHROPIC_API_KEY never leaves the server
+    const { title, summary } = await summariseConversation(
+      conversation_text.trim(),
+      resolvedType
+    );
+
+    // Use page title as a hint if the summary title extraction fails
+    const finalTitle = title || (page_title?.trim().slice(0, 120)) || 'AI Conversation';
+
+    const result = await ingestContent(
+      {
+        title: finalTitle,
+        content: summary,
+        source_url: source_url ?? undefined,
+        source_type: resolvedType,
+        tags: ['ai-conversation', resolvedType, 'extension-capture'],
+        force_new: false,
+      },
+      auth.userId
+    );
+    res.json(result);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[extension-ingest] error:', msg);
+    res.status(500).json({ error: msg });
+  }
 });
 
 // ─── Obsidian sync REST endpoint ─────────────────────────────────────────────

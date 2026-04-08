@@ -161,6 +161,96 @@ export async function writeNote(videoId: string, note: string, userId: string) {
   if (error) throw new Error(`Failed to write note: ${error.message}`);
 }
 
+// ─── Dedup helpers ────────────────────────────────────────────────────────────
+
+/** Return the existing item UUID if a row exists with this source_url for the user. */
+export async function findItemBySourceUrl(sourceUrl: string, userId: string): Promise<string | null> {
+  const { data } = await dbAdmin
+    .from('items')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('source_url', sourceUrl)
+    .limit(1);
+  return (data ?? [])[0]?.id ?? null;
+}
+
+/** Return the existing item UUID if a row exists with this exact title for the user. */
+export async function findItemByTitle(title: string, userId: string): Promise<string | null> {
+  const { data } = await dbAdmin
+    .from('items')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('title', title)
+    .limit(1);
+  return (data ?? [])[0]?.id ?? null;
+}
+
+// ─── Tag helper (shared across ingest paths) ──────────────────────────────────
+
+/**
+ * Get-or-create tags by name and link them to the given item.
+ * Non-fatal — a tag linking failure never aborts an ingest.
+ */
+export async function linkTags(itemId: string, tagNames: string[]): Promise<void> {
+  for (const raw of tagNames) {
+    const name = raw.trim();
+    if (!name) continue;
+    try {
+      const { data: existing } = await dbAdmin
+        .from('tags')
+        .select('id')
+        .eq('name', name)
+        .limit(1);
+
+      let tagId: string | undefined = (existing ?? [])[0]?.id;
+
+      if (!tagId) {
+        const { data: created } = await dbAdmin
+          .from('tags')
+          .insert({ name })
+          .select('id')
+          .single();
+        tagId = created?.id;
+      }
+
+      if (!tagId) continue;
+
+      try {
+        await dbAdmin.from('item_tags').insert({ item_id: itemId, tag_id: tagId });
+      } catch { /* ignore duplicate constraint violations */ }
+    } catch { /* non-fatal */ }
+  }
+}
+
+// ─── Retrieval tracking ───────────────────────────────────────────────────────
+
+/**
+ * Atomically increment retrieval_count + set last_retrieved_at for a batch of items.
+ * Fire-and-forget from search — never throws.
+ */
+export async function incrementRetrievalStats(itemIds: string[]): Promise<void> {
+  if (itemIds.length === 0) return;
+  try {
+    await dbAdmin.rpc('increment_retrieval_stats', { item_ids: itemIds });
+  } catch (err) {
+    console.warn('[db] incrementRetrievalStats failed (non-fatal):', err);
+  }
+}
+
+// ─── Daily ingest count ───────────────────────────────────────────────────────
+
+/** Count items this user has created (inserted) since the start of today (UTC). */
+export async function countIngestsToday(userId: string): Promise<number> {
+  const startOfDay = new Date();
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  const { count } = await dbAdmin
+    .from('items')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .gte('created_at', startOfDay.toISOString());
+  return count ?? 0;
+}
+
 // ─── Semantic search via pgvector RPC ─────────────────────────────────────────
 
 export interface SemanticResult {
