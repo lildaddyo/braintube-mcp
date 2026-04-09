@@ -29,7 +29,12 @@ export async function getRecentConversations(
     .order('created_at', { ascending: false })
     .limit(n);
 
-  if (error) throw new Error(`get_recent_conversations failed: ${error.message}`);
+  if (error) {
+    return {
+      content: [{ type: 'text' as const, text: `get_recent_conversations failed: ${error.message}` }],
+      structuredContent: { conversations: [] } as unknown as Record<string, unknown>
+    };
+  }
 
   const results: ConversationItem[] = (data ?? []).map(row => ({
     title: row.title ?? 'Untitled',
@@ -44,7 +49,7 @@ export async function getRecentConversations(
         type: 'text' as const,
         text: 'No saved AI conversations found. Save Claude or ChatGPT conversations via the extension to populate this.'
       }],
-      structuredContent: { items: [] } as unknown as Record<string, unknown>
+      structuredContent: { conversations: [] } as unknown as Record<string, unknown>
     };
   }
 
@@ -54,6 +59,6 @@ export async function getRecentConversations(
 
   return {
     content: [{ type: 'text' as const, text: `Recent AI conversations (${results.length}):\n\n${lines.join('\n\n')}` }],
-    structuredContent: results as unknown as Record<string, unknown>
+    structuredContent: { conversations: results } as unknown as Record<string, unknown>
   };
 }

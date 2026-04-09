@@ -7,6 +7,7 @@ import { handleObsidianSync } from './routes/obsidian-sync.js';
 import { oauthRouter } from './routes/oauth.js';
 import { ingestContent } from './tools/ingest.js';
 import { summariseConversation } from './tools/summarise.js';
+import { backfillEmbeddings } from './tools/embedding.js';
 import type { AuthContext } from './types.js';
 
 const app = express();
@@ -76,7 +77,7 @@ app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     service: 'braintube-mcp',
-    version: '3.2.0',
+    version: '3.3.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -186,6 +187,25 @@ app.post('/api/extension-ingest', requireAuth, mcpRateLimit, async (req, res) =>
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[extension-ingest] error:', msg);
     res.status(500).json({ error: msg });
+  }
+});
+
+// ─── Backfill embeddings endpoint ────────────────────────────────────────────
+// POST /api/backfill — triggers backfillEmbeddings for the authenticated user.
+// Returns { embedded, errors, firstError? } when done.
+// Use this when backfill_embeddings is beyond the 15-tool cap in claude.ai.
+app.post('/api/backfill', requireAuth, async (req, res) => {
+  const auth = (req as express.Request & { auth: AuthContext }).auth;
+  const batchSize = parseInt((req.query.batch_size as string) ?? '20', 10);
+  console.log(`[backfill] starting for user ${auth.userId}, batchSize=${batchSize}`);
+  try {
+    const result = await backfillEmbeddings(auth.userId, batchSize);
+    console.log(`[backfill] done — embedded=${result.embedded}, errors=${result.errors}`);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[backfill] error:', msg);
+    res.status(500).json({ ok: false, error: msg });
   }
 });
 
