@@ -110,49 +110,55 @@ export async function embedItemsBatch(
 // ─── Batch backfill ────────────────────────────────────────────────────────────
 
 /**
- * Page through all items where embedding IS NULL for a given user,
- * embed each one, with a 200ms delay between batches to avoid rate limits.
+ * Backfill embeddings for all items where embedding IS NULL.
+ *
+ * Fetches ALL null-embedding IDs upfront (avoids offset-pagination skipping items
+ * whose embedding flips from NULL → filled mid-run), then processes in batches of
+ * `batchSize` with 200ms delays to avoid rate limits.
  */
 export async function backfillEmbeddings(
   userId: string,
   batchSize = 20
-): Promise<{ embedded: number; errors: number }> {
+): Promise<{ embedded: number; errors: number; firstError?: string }> {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is not set — add it as a Railway environment variable');
+  }
+
+  // Fetch all IDs upfront so offset-drift doesn't skip items
+  const { data: allItems, error: fetchError } = await dbAdmin
+    .from('items')
+    .select('id')
+    .eq('user_id', userId)
+    .is('embedding', null)
+    .eq('is_archived', false)
+    .order('created_at', { ascending: false });
+
+  if (fetchError) throw new Error(`backfillEmbeddings: fetch failed — ${fetchError.message}`);
+  if (!allItems || allItems.length === 0) return { embedded: 0, errors: 0 };
+
   let embedded = 0;
   let errors = 0;
-  let offset = 0;
+  let firstError: string | undefined;
 
-  while (true) {
-    const { data: batch, error } = await dbAdmin
-      .from('items')
-      .select('id')
-      .eq('user_id', userId)
-      .is('embedding', null)
-      .eq('is_archived', false)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + batchSize - 1);
+  for (let i = 0; i < allItems.length; i += batchSize) {
+    const batch = allItems.slice(i, i + batchSize);
 
-    if (error) throw new Error(`backfillEmbeddings: fetch failed — ${error.message}`);
-    if (!batch || batch.length === 0) break;
-
-    for (const item of batch) {
+    await Promise.all(batch.map(async ({ id }) => {
       try {
-        await embedItem(item.id);
+        await embedItem(id);
         embedded++;
       } catch (err) {
-        console.error(`[embed] failed for item ${item.id}:`, err);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[embed] failed for item ${id}:`, msg);
+        if (!firstError) firstError = `item ${id}: ${msg}`;
         errors++;
       }
-    }
+    }));
 
-    offset += batchSize;
-
-    // 200ms delay between batches
-    if (batch.length === batchSize) {
+    if (i + batchSize < allItems.length) {
       await new Promise(r => setTimeout(r, 200));
-    } else {
-      break; // last batch was smaller than batchSize — done
     }
   }
 
-  return { embedded, errors };
+  return { embedded, errors, firstError };
 }

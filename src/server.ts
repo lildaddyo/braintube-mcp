@@ -279,11 +279,12 @@ export function createMcpServer(auth: AuthContext) {
     },
     async () => {
       const result = await backfillEmbeddings(auth.userId);
+      const summary = [
+        `Backfill complete. Embedded: ${result.embedded}, Errors: ${result.errors}`,
+        result.firstError ? `First error: ${result.firstError}` : null
+      ].filter(Boolean).join('\n');
       return {
-        content: [{
-          type: 'text' as const,
-          text: `Backfill complete. Embedded: ${result.embedded}, Errors: ${result.errors}`
-        }],
+        content: [{ type: 'text' as const, text: summary }],
         structuredContent: result as unknown as Record<string, unknown>
       };
     }
