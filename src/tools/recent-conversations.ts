@@ -22,7 +22,7 @@ export async function getRecentConversations(
 
   const { data, error } = await dbAdmin
     .from('items')
-    .select('id, title, content, source_url, created_at')
+    .select('id, title, summary, source_url, created_at')
     .eq('user_id', userId)
     .eq('is_archived', false)
     .in('source_type', ['claude', 'chatgpt'])
@@ -33,7 +33,7 @@ export async function getRecentConversations(
 
   const results: ConversationItem[] = (data ?? []).map(row => ({
     title: row.title ?? 'Untitled',
-    summary: row.content ?? '',
+    summary: (row as any).summary ?? '',
     date: row.created_at,
     source_url: row.source_url ?? null,
   }));
