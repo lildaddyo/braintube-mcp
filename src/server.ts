@@ -10,6 +10,11 @@ import { backfillEmbeddings } from './tools/embedding.js';
 import { ingestNotionPage, ingestNotionDatabase, setNotionApiKey } from './tools/notion-ingest.js';
 import { ingestContentSchema, ingestContent } from './tools/ingest.js';
 import { bulkIngestSchema, bulkIngest } from './tools/bulk-ingest.js';
+import { relatedSchema, getRelated } from './tools/related.js';
+import { searchBySourceSchema, searchBySource } from './tools/search-by-source.js';
+import { tagItemSchema, tagItem } from './tools/tag-item.js';
+import { resurfaceSchema, randomResuface } from './tools/resurface.js';
+import { searchByDateSchema, searchByDate } from './tools/search-by-date.js';
 import { dbAdmin } from './db/supabase.js';
 import type { AuthContext } from './types.js';
 
@@ -226,6 +231,58 @@ export function createMcpServer(auth: AuthContext) {
         structuredContent: { key: raw, label: input.label ?? null } as unknown as Record<string, unknown>
       };
     }
+  );
+
+  // ── Phase 2 tools ─────────────────────────────────────────────────────────────
+
+  server.registerTool(
+    'get_related',
+    {
+      description: 'Find items semantically similar to a given item using vector similarity. Useful for discovering related concepts, follow-up research, or building knowledge clusters. Requires embeddings — run backfill_embeddings first if results are empty.',
+      inputSchema: relatedSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => getRelated(input, auth.userId)
+  );
+
+  server.registerTool(
+    'search_by_source',
+    {
+      description: 'Search your corpus filtered to a specific source type. Use when you want results only from "youtube", "instagram", "web", "notion", "linkedin", "twitter", "github", "reddit", "pdf", "note", etc. Combines semantic + keyword fallback.',
+      inputSchema: searchBySourceSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => searchBySource(input, auth.userId)
+  );
+
+  server.registerTool(
+    'tag_item',
+    {
+      description: 'Add or remove tags on a saved item. Tags are stored as a text array on the item. Provide add[] and/or remove[] arrays. Tags are normalized to lowercase.',
+      inputSchema: tagItemSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+    },
+    (input) => tagItem(input, auth.userId)
+  );
+
+  server.registerTool(
+    'random_resurface',
+    {
+      description: 'Surface forgotten items from your corpus using weighted randomness — items you\'ve retrieved least often are most likely to appear. Great for spaced repetition and rediscovering old saves.',
+      inputSchema: resurfaceSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => randomResuface(input, auth.userId)
+  );
+
+  server.registerTool(
+    'search_by_date_range',
+    {
+      description: 'Semantic search scoped to items saved between two dates. Pass ISO 8601 dates for "after" and "before". Useful for reviewing what you captured during a specific period or project.',
+      inputSchema: searchByDateSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => searchByDate(input, auth.userId)
   );
 
   return server;
