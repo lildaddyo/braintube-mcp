@@ -276,8 +276,10 @@ export async function semanticSearchRpc(
   embedding: number[],
   userId: string,
   limit = 10,
-  threshold = 0.3
+  threshold = 0.1
 ): Promise<SemanticResult[]> {
+  console.log(`[semanticSearchRpc] embedding dims=${embedding.length}, limit=${limit}, threshold=${threshold}`);
+
   const { data, error } = await dbAdmin.rpc('search_knowledge_semantic', {
     query_embedding: embedding,
     match_user_id: userId,
@@ -285,6 +287,16 @@ export async function semanticSearchRpc(
     similarity_threshold: threshold
   });
 
-  if (error) throw new Error(`Semantic search RPC failed: ${error.message}`);
-  return (data ?? []).map((row: SemanticResult) => ({ ...row, match_type: 'semantic' as const }));
+  if (error) {
+    console.error('[semanticSearchRpc] RPC error:', error.message, error);
+    throw new Error(`Semantic search RPC failed: ${error.message}`);
+  }
+
+  const rows = (data ?? []) as SemanticResult[];
+  console.log(`[semanticSearchRpc] RPC returned ${rows.length} rows`);
+  if (rows.length > 0) {
+    console.log(`[semanticSearchRpc] top similarity=${rows[0].similarity?.toFixed(4)}, bottom=${rows[rows.length - 1].similarity?.toFixed(4)}`);
+  }
+
+  return rows.map((row: SemanticResult) => ({ ...row, match_type: 'semantic' as const }));
 }

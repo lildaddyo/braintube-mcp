@@ -16,10 +16,18 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
   const { query, limit } = input;
 
   // ── Semantic path (query > 10 chars and OPENAI_API_KEY present) ──────────────
-  if (query.trim().length > 10 && process.env.OPENAI_API_KEY) {
+  const hasApiKey = !!process.env.OPENAI_API_KEY;
+  const queryLongEnough = query.trim().length > 10;
+  console.log(`[search] query="${query.slice(0, 80)}", limit=${limit}, hasApiKey=${hasApiKey}, queryLongEnough=${queryLongEnough}`);
+
+  if (queryLongEnough && hasApiKey) {
     try {
+      console.log('[search] generating query embedding…');
       const embedding = await generateEmbedding(query);
+      console.log(`[search] embedding generated, dims=${embedding.length}`);
+
       const semanticResults = await semanticSearchRpc(embedding, userId, limit);
+      console.log(`[search] semantic returned ${semanticResults.length} results`);
 
       if (semanticResults.length > 0) {
         // Fire-and-forget retrieval tracking (never delays or fails the search)
@@ -32,11 +40,13 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
           structuredContent: tainted as unknown as Record<string, unknown>
         };
       }
-      // Fall through to ILIKE if RPC returned zero results
+      console.log('[search] semantic returned 0 results (all below threshold), falling back to keyword');
     } catch (err) {
-      console.error('[search] semantic path failed, falling back to keyword:', err);
+      console.error('[search] semantic path threw, falling back to keyword:', err);
       // Non-fatal — fall through to ILIKE
     }
+  } else {
+    console.log(`[search] skipping semantic: queryLongEnough=${queryLongEnough}, hasApiKey=${hasApiKey}`);
   }
 
   // ── Keyword fallback (ILIKE across title, description, summary, transcript) ──
