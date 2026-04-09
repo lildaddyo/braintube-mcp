@@ -22,8 +22,10 @@ import type { AuthContext } from './types.js';
 export function createMcpServer(auth: AuthContext) {
   const server = new McpServer({
     name: 'braintube-mcp',
-    version: '3.0.0',
+    version: '3.1.0',
   });
+
+  // ── Core read tools (1-4) ─────────────────────────────────────────────────────
 
   server.registerTool(
     'search_knowledge',
@@ -65,6 +67,60 @@ export function createMcpServer(auth: AuthContext) {
     (input) => getStats(input, auth.userId)
   );
 
+  // ── Phase 2 tools (5-9) ───────────────────────────────────────────────────────
+
+  server.registerTool(
+    'get_related',
+    {
+      description: 'Find items semantically similar to a given item using vector similarity. Useful for discovering related concepts, follow-up research, or building knowledge clusters. Requires embeddings — run backfill_embeddings first if results are empty.',
+      inputSchema: relatedSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => getRelated(input, auth.userId)
+  );
+
+  server.registerTool(
+    'search_by_source',
+    {
+      description: 'Search your corpus filtered to a specific source type. Use when you want results only from "youtube", "instagram", "web", "notion", "linkedin", "twitter", "github", "reddit", "pdf", "note", etc. Combines semantic + keyword fallback.',
+      inputSchema: searchBySourceSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => searchBySource(input, auth.userId)
+  );
+
+  server.registerTool(
+    'search_by_date_range',
+    {
+      description: 'Semantic search scoped to items saved between two dates. Pass ISO 8601 dates for "after" and "before". Useful for reviewing what you captured during a specific period or project.',
+      inputSchema: searchByDateSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => searchByDate(input, auth.userId)
+  );
+
+  server.registerTool(
+    'tag_item',
+    {
+      description: 'Add or remove tags on a saved item. Tags are stored as a text array on the item. Provide add[] and/or remove[] arrays. Tags are normalized to lowercase.',
+      inputSchema: tagItemSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+    },
+    (input) => tagItem(input, auth.userId)
+  );
+
+  server.registerTool(
+    'random_resurface',
+    {
+      description: 'Surface forgotten items from your corpus using weighted randomness — items you\'ve retrieved least often are most likely to appear. Great for spaced repetition and rediscovering old saves.',
+      inputSchema: resurfaceSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => randomResuface(input, auth.userId)
+  );
+
+  // ── Write tools (10-11) ───────────────────────────────────────────────────────
+
   server.registerTool(
     'add_note',
     {
@@ -75,28 +131,43 @@ export function createMcpServer(auth: AuthContext) {
     (input) => addNote(input, auth.userId)
   );
 
-  // ── Embedding tools ──────────────────────────────────────────────────────────
+  // ── Ingest tools (12-15) ──────────────────────────────────────────────────────
 
   server.registerTool(
-    'backfill_embeddings',
+    'ingest_content',
     {
-      description: 'Generate and store vector embeddings for all your items that are missing them. Required before semantic search works. Processes in batches of 20 with 200ms delays. Returns { embedded, errors } count.',
-      inputSchema: z.object({}),
+      description: 'Ingest a single piece of content (note, article, document, etc.) into your BrainTube corpus. Deduplicates by source_url first, then by exact title match. Immediately generates an embedding. Use force_new=true to skip dedup and always insert.',
+      inputSchema: ingestContentSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
-    async () => {
-      const result = await backfillEmbeddings(auth.userId);
+    async (input) => {
+      const result = await ingestContent(input, auth.userId);
       return {
         content: [{
           type: 'text' as const,
-          text: `Backfill complete. Embedded: ${result.embedded}, Errors: ${result.errors}`
+          text: `Content ${result.action}: "${result.title}" (id: ${result.id})`
         }],
         structuredContent: result as unknown as Record<string, unknown>
       };
     }
   );
 
-  // ── Notion ingest tools ───────────────────────────────────────────────────────
+  server.registerTool(
+    'bulk_ingest',
+    {
+      description: 'Ingest up to 50 items in a single call. Each item is deduplicated (source_url → title fallback), inserted or updated, then embedded in batches of 20. Daily limit: 500 new items per user. Returns { inserted, updated, skipped, errors[] }.',
+      inputSchema: bulkIngestSchema,
+      annotations: { readOnlyHint: false, idempotentHint: true }
+    },
+    async (input) => {
+      const result = await bulkIngest(input, auth.userId);
+      const summary = `Bulk ingest complete. Inserted: ${result.inserted}, Updated: ${result.updated}, Skipped: ${result.skipped}${result.errors.length ? `\nErrors (${result.errors.length}):\n${result.errors.join('\n')}` : ''}`;
+      return {
+        content: [{ type: 'text' as const, text: summary }],
+        structuredContent: result as unknown as Record<string, unknown>
+      };
+    }
+  );
 
   server.registerTool(
     'ingest_notion_page',
@@ -142,6 +213,8 @@ export function createMcpServer(auth: AuthContext) {
     }
   );
 
+  // ── Admin / setup tools (16-17 — safe to drop if client caps at 15) ──────────
+
   server.registerTool(
     'set_notion_api_key',
     {
@@ -162,45 +235,24 @@ export function createMcpServer(auth: AuthContext) {
     }
   );
 
-  // ── Manual ingest tools ───────────────────────────────────────────────────────
-
   server.registerTool(
-    'ingest_content',
+    'backfill_embeddings',
     {
-      description: 'Ingest a single piece of content (note, article, document, etc.) into your BrainTube corpus. Deduplicates by source_url first, then by exact title match. Immediately generates an embedding. Use force_new=true to skip dedup and always insert.',
-      inputSchema: ingestContentSchema,
+      description: 'Generate and store vector embeddings for all your items that are missing them. Required before semantic search works. Processes in batches of 20 with 200ms delays. Returns { embedded, errors } count.',
+      inputSchema: z.object({}),
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
-    async (input) => {
-      const result = await ingestContent(input, auth.userId);
+    async () => {
+      const result = await backfillEmbeddings(auth.userId);
       return {
         content: [{
           type: 'text' as const,
-          text: `Content ${result.action}: "${result.title}" (id: ${result.id})`
+          text: `Backfill complete. Embedded: ${result.embedded}, Errors: ${result.errors}`
         }],
         structuredContent: result as unknown as Record<string, unknown>
       };
     }
   );
-
-  server.registerTool(
-    'bulk_ingest',
-    {
-      description: 'Ingest up to 50 items in a single call. Each item is deduplicated (source_url → title fallback), inserted or updated, then embedded in batches of 20. Daily limit: 500 new items per user. Returns { inserted, updated, skipped, errors[] }.',
-      inputSchema: bulkIngestSchema,
-      annotations: { readOnlyHint: false, idempotentHint: true }
-    },
-    async (input) => {
-      const result = await bulkIngest(input, auth.userId);
-      const summary = `Bulk ingest complete. Inserted: ${result.inserted}, Updated: ${result.updated}, Skipped: ${result.skipped}${result.errors.length ? `\nErrors (${result.errors.length}):\n${result.errors.join('\n')}` : ''}`;
-      return {
-        content: [{ type: 'text' as const, text: summary }],
-        structuredContent: result as unknown as Record<string, unknown>
-      };
-    }
-  );
-
-  // ── API key management ────────────────────────────────────────────────────────
 
   server.registerTool(
     'generate_api_key',
@@ -231,58 +283,6 @@ export function createMcpServer(auth: AuthContext) {
         structuredContent: { key: raw, label: input.label ?? null } as unknown as Record<string, unknown>
       };
     }
-  );
-
-  // ── Phase 2 tools ─────────────────────────────────────────────────────────────
-
-  server.registerTool(
-    'get_related',
-    {
-      description: 'Find items semantically similar to a given item using vector similarity. Useful for discovering related concepts, follow-up research, or building knowledge clusters. Requires embeddings — run backfill_embeddings first if results are empty.',
-      inputSchema: relatedSchema,
-      annotations: { readOnlyHint: true, openWorldHint: false }
-    },
-    (input) => getRelated(input, auth.userId)
-  );
-
-  server.registerTool(
-    'search_by_source',
-    {
-      description: 'Search your corpus filtered to a specific source type. Use when you want results only from "youtube", "instagram", "web", "notion", "linkedin", "twitter", "github", "reddit", "pdf", "note", etc. Combines semantic + keyword fallback.',
-      inputSchema: searchBySourceSchema,
-      annotations: { readOnlyHint: true, openWorldHint: false }
-    },
-    (input) => searchBySource(input, auth.userId)
-  );
-
-  server.registerTool(
-    'tag_item',
-    {
-      description: 'Add or remove tags on a saved item. Tags are stored as a text array on the item. Provide add[] and/or remove[] arrays. Tags are normalized to lowercase.',
-      inputSchema: tagItemSchema,
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
-    },
-    (input) => tagItem(input, auth.userId)
-  );
-
-  server.registerTool(
-    'random_resurface',
-    {
-      description: 'Surface forgotten items from your corpus using weighted randomness — items you\'ve retrieved least often are most likely to appear. Great for spaced repetition and rediscovering old saves.',
-      inputSchema: resurfaceSchema,
-      annotations: { readOnlyHint: true, openWorldHint: false }
-    },
-    (input) => randomResuface(input, auth.userId)
-  );
-
-  server.registerTool(
-    'search_by_date_range',
-    {
-      description: 'Semantic search scoped to items saved between two dates. Pass ISO 8601 dates for "after" and "before". Useful for reviewing what you captured during a specific period or project.',
-      inputSchema: searchByDateSchema,
-      annotations: { readOnlyHint: true, openWorldHint: false }
-    },
-    (input) => searchByDate(input, auth.userId)
   );
 
   return server;
