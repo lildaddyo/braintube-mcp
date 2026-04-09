@@ -15,6 +15,9 @@ import { searchBySourceSchema, searchBySource } from './tools/search-by-source.j
 import { tagItemSchema, tagItem } from './tools/tag-item.js';
 import { resurfaceSchema, randomResuface } from './tools/resurface.js';
 import { searchByDateSchema, searchByDate } from './tools/search-by-date.js';
+import { recentConversationsSchema, getRecentConversations } from './tools/recent-conversations.js';
+import { expertiseProfileSchema, getExpertiseProfileTool } from './tools/expertise-profile.js';
+import { sessionBriefSchema, getSessionBrief } from './tools/session-brief.js';
 import { dbAdmin } from './db/supabase.js';
 import type { AuthContext } from './types.js';
 
@@ -22,7 +25,7 @@ import type { AuthContext } from './types.js';
 export function createMcpServer(auth: AuthContext) {
   const server = new McpServer({
     name: 'braintube-mcp',
-    version: '3.1.0',
+    version: '3.2.0',
   });
 
   // ── Core read tools (1-4) ─────────────────────────────────────────────────────
@@ -119,7 +122,7 @@ export function createMcpServer(auth: AuthContext) {
     (input) => randomResuface(input, auth.userId)
   );
 
-  // ── Write tools (10-11) ───────────────────────────────────────────────────────
+  // ── Write tools (10) ─────────────────────────────────────────────────────────
 
   server.registerTool(
     'add_note',
@@ -131,7 +134,39 @@ export function createMcpServer(auth: AuthContext) {
     (input) => addNote(input, auth.userId)
   );
 
-  // ── Ingest tools (12-15) ──────────────────────────────────────────────────────
+  // ── Session brief tools (11-13) ───────────────────────────────────────────────
+
+  server.registerTool(
+    'get_recent_conversations',
+    {
+      description: 'Retrieve your most recently saved Claude and ChatGPT conversations. Useful for resuming context from a previous session or reviewing past AI-assisted work.',
+      inputSchema: recentConversationsSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => getRecentConversations(input, auth.userId)
+  );
+
+  server.registerTool(
+    'get_expertise_profile',
+    {
+      description: 'Analyse your corpus to build a knowledge expertise profile. Tags are classified as expert (>50 items), intermediate (20-50), surface (5-20), or blind spots (<5). Also returns dominant source types and recent 7-day focus.',
+      inputSchema: expertiseProfileSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => getExpertiseProfileTool(input, auth.userId)
+  );
+
+  server.registerTool(
+    'get_session_brief',
+    {
+      description: 'One-shot session bootstrap: combines expertise profile, last 5 AI conversations, and corpus stats into a single JSON object. Call this at the start of a session to load full context without multiple round-trips.',
+      inputSchema: sessionBriefSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => getSessionBrief(input, auth.userId)
+  );
+
+  // ── Ingest tools (14-15) ──────────────────────────────────────────────────────
 
   server.registerTool(
     'ingest_content',
@@ -283,6 +318,43 @@ export function createMcpServer(auth: AuthContext) {
         structuredContent: { key: raw, label: input.label ?? null } as unknown as Record<string, unknown>
       };
     }
+  );
+
+  // ── MCP Prompt: session_start ─────────────────────────────────────────────────
+
+  server.registerPrompt(
+    'session_start',
+    {
+      title: 'Session Start',
+      description: 'Loads your BrainTube context at session start. Instructs the AI to call get_session_brief on the first user message and use your knowledge profile, recent conversations, and corpus stats to proactively inform all responses.',
+    },
+    () => ({
+      messages: [
+        {
+          role: 'user' as const,
+          content: {
+            type: 'text' as const,
+            text: `You are connected to the user's personal BrainTube knowledge corpus via MCP tools.
+
+ON THE FIRST USER MESSAGE (not now, not on connection — wait for the user to speak first):
+1. Silently call get_session_brief() to load their context.
+2. Use the returned data to inform all your responses throughout this session:
+   - expertise: their knowledge depth by topic — reference this when answering questions
+   - recent_work: their last AI conversations — pick up threads naturally if relevant
+   - corpus_stats: size and freshness of their library
+
+DURING THE SESSION:
+- If the user asks about any topic that overlaps with their corpus, proactively call search_knowledge to find relevant saved items, then cite them.
+- If the user mentions a concept they have expert-level coverage on, acknowledge their depth and go deeper.
+- If the user asks about a blind-spot topic, note it's an area with little saved material and suggest they explore and save content on it.
+- Reference recent conversations naturally ("you were working on X recently…") without being asked.
+- Never announce that you're loading context — just use it.
+
+Do not call get_session_brief() yet. Wait for the user's first message.`
+          }
+        }
+      ]
+    })
   );
 
   return server;
