@@ -111,5 +111,18 @@ export async function ingestContent(
     console.error(`[ingest] embed failed for ${itemId} (item saved, embedding NULL):`, err);
   }
 
+  // ── Log to ingest_log (best-effort) ──────────────────────────────────────
+  try {
+    await dbAdmin.from('ingest_log').insert({
+      user_id:     userId,
+      item_id:     itemId,
+      source_type: source_type ?? 'manual',
+      action,
+      title,
+    });
+  } catch (err) {
+    console.error(`[ingest] ingest_log write failed (non-fatal):`, err);
+  }
+
   return { id: itemId, title, action };
 }

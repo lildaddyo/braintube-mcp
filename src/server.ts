@@ -19,6 +19,7 @@ import { recentConversationsSchema, getRecentConversations } from './tools/recen
 import { expertiseProfileSchema, getExpertiseProfileTool } from './tools/expertise-profile.js';
 import { sessionBriefSchema, getSessionBrief } from './tools/session-brief.js';
 import { listBookmarksSchema, listBookmarks, toggleBookmarkSchema, toggleBookmark } from './tools/bookmarks.js';
+import { searchObsidianSchema, searchObsidian } from './tools/obsidian-search.js';
 import { dbAdmin } from './db/supabase.js';
 import type { AuthContext } from './types.js';
 
@@ -26,7 +27,7 @@ import type { AuthContext } from './types.js';
 export function createMcpServer(auth: AuthContext) {
   const server = new McpServer({
     name: 'braintube-mcp',
-    version: '3.2.0',
+    version: '3.7.0',
   });
 
   // ── Core read tools (1-4) ─────────────────────────────────────────────────────
@@ -340,6 +341,18 @@ export function createMcpServer(auth: AuthContext) {
         structuredContent: { key: raw, label: input.label ?? null } as unknown as Record<string, unknown>
       };
     }
+  );
+
+  // ── Phase 5 tools (23) ───────────────────────────────────────────────────────
+
+  server.registerTool(
+    'search_obsidian',
+    {
+      description: 'Search your local Obsidian vault via the Obsidian Local REST API plugin (exposed through Tailscale). Returns matching notes with title, file path, and a text excerpt. Requires OBSIDIAN_BRIDGE_URL and OBSIDIAN_API_KEY set in Railway env vars.',
+      inputSchema: searchObsidianSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => searchObsidian(input)
   );
 
   // ── MCP Prompt: session_start ─────────────────────────────────────────────────
