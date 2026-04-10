@@ -12,7 +12,7 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { generateEmbeddings } from "../_shared/embed.ts";
+import { generateEmbeddings } from "../_shared/embeddings.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
