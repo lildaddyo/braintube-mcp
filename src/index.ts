@@ -77,7 +77,7 @@ app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     service: 'braintube-mcp',
-    version: '3.5.1',
+    version: '3.6.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -154,7 +154,7 @@ app.post('/api/extension-ingest', requireAuth, mcpRateLimit, async (req, res) =>
   const allowedTypes = [
     'note', 'manual', 'article', 'web', 'document', 'pdf', 'ebook',
     'research_paper', 'work', 'reddit', 'medium', 'substack', 'github',
-    'notion', 'chatgpt', 'claude', 'gemini', 'wikipedia'
+    'notion', 'chatgpt', 'claude', 'gemini', 'wikipedia', 'bookmark'
   ] as const;
   type AllowedType = typeof allowedTypes[number];
   const resolvedType: AllowedType = allowedTypes.includes(source_type as AllowedType)

@@ -18,7 +18,7 @@ const bulkItemSchema = z.object({
   source_type: z.enum([
     'note', 'manual', 'article', 'web', 'document', 'pdf', 'ebook',
     'research_paper', 'work', 'reddit', 'medium', 'substack', 'github',
-    'notion', 'chatgpt', 'claude', 'gemini', 'wikipedia'
+    'notion', 'chatgpt', 'claude', 'gemini', 'wikipedia', 'bookmark'
   ]).default('manual'),
   tags: z.array(z.string().min(1).max(100)).max(20).optional(),
 });

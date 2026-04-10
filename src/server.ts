@@ -18,6 +18,7 @@ import { searchByDateSchema, searchByDate } from './tools/search-by-date.js';
 import { recentConversationsSchema, getRecentConversations } from './tools/recent-conversations.js';
 import { expertiseProfileSchema, getExpertiseProfileTool } from './tools/expertise-profile.js';
 import { sessionBriefSchema, getSessionBrief } from './tools/session-brief.js';
+import { listBookmarksSchema, listBookmarks, toggleBookmarkSchema, toggleBookmark } from './tools/bookmarks.js';
 import { dbAdmin } from './db/supabase.js';
 import type { AuthContext } from './types.js';
 
@@ -110,6 +111,26 @@ export function createMcpServer(auth: AuthContext) {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
     },
     (input) => tagItem(input, auth.userId)
+  );
+
+  server.registerTool(
+    'list_bookmarks',
+    {
+      description: 'List saved bookmarks from your corpus. Filter by read/unread status. Returns title, URL, tags, and read state sorted by bookmarked_at desc.',
+      inputSchema: listBookmarksSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => listBookmarks(input, auth.userId)
+  );
+
+  server.registerTool(
+    'toggle_bookmark',
+    {
+      description: 'Bookmark an item, remove a bookmark, or toggle its read/unread state. Actions: bookmark | unbookmark | mark_read | mark_unread.',
+      inputSchema: toggleBookmarkSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+    },
+    (input) => toggleBookmark(input, auth.userId)
   );
 
   server.registerTool(
