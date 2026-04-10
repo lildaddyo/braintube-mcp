@@ -17,7 +17,7 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
 
   // ── Semantic path (query > 10 chars and OPENAI_API_KEY present) ──────────────
   const hasApiKey = !!process.env.OPENAI_API_KEY;
-  const queryLongEnough = query.trim().length > 10;
+  const queryLongEnough = query.trim().length >= 3;
   console.log(`[search] query="${query.slice(0, 80)}", limit=${limit}, hasApiKey=${hasApiKey}, queryLongEnough=${queryLongEnough}`);
 
   if (queryLongEnough && hasApiKey) {
