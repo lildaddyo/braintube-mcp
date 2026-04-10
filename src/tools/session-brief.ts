@@ -43,9 +43,11 @@ export async function getSessionBrief(
     : 'never';
 
   // Extract recent_work from the structured content of getRecentConversations
-  const recentWork = (recentConvsResult.structuredContent as unknown) as Array<{
-    title: string; summary: string; date: string; source_url: string | null
-  }>;
+  // structuredContent is { conversations: [...] } — unwrap the array
+  const structuredObj = recentConvsResult.structuredContent as unknown as {
+    conversations: Array<{ title: string; summary: string; date: string; source_url: string | null }>
+  };
+  const recentWork = Array.isArray(structuredObj?.conversations) ? structuredObj.conversations : [];
 
   const brief = {
     expertise: {
@@ -56,7 +58,7 @@ export async function getSessionBrief(
       recent_focus: expertiseResult.recent_focus,
       dominant_sources: expertiseResult.dominant_sources.slice(0, 5),
     },
-    recent_work: Array.isArray(recentWork) ? recentWork : [],
+    recent_work: recentWork,
     corpus_stats: {
       total: totalCount ?? 0,
       last_added: lastAdded,
@@ -71,7 +73,7 @@ export async function getSessionBrief(
     ? `Recent focus: ${brief.expertise.recent_focus.join(', ')}`
     : 'No recent tagging activity';
   const statsStr = `Corpus: ${brief.corpus_stats.total} items, last added ${brief.corpus_stats.last_added}`;
-  const workStr = Array.isArray(recentWork) && recentWork.length
+  const workStr = recentWork.length
     ? `Last conversations: ${(recentWork as Array<{ title: string }>).map(r => r.title).join(' | ')}`
     : 'No recent AI conversations saved';
 
