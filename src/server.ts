@@ -113,13 +113,25 @@ export function createMcpServer(auth: AuthContext) {
   );
 
   server.registerTool(
-    'random_resurface',
+    'ingest_notion_page',
     {
-      description: 'Surface forgotten items from your corpus using weighted randomness — items you\'ve retrieved least often are most likely to appear. Great for spaced repetition and rediscovering old saves.',
-      inputSchema: resurfaceSchema,
-      annotations: { readOnlyHint: true, openWorldHint: false }
+      description: 'Ingest a single Notion page into your BrainTube corpus. Accepts a full Notion URL or raw page UUID. Extracts title + body text, upserts to items table, and immediately generates an embedding. Requires set_notion_api_key first.',
+      inputSchema: z.object({
+        page_url:  z.string().min(1).describe('Notion page URL (e.g. https://notion.so/My-Page-abc123) or raw UUID'),
+        force_new: z.boolean().default(false).describe('Skip dedup and always insert as new item')
+      }),
+      annotations: { readOnlyHint: false, idempotentHint: true }
     },
-    (input) => randomResuface(input, auth.userId)
+    async (input) => {
+      const result = await ingestNotionPage(input.page_url, auth.userId, input.force_new);
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Notion page ${result.action}: "${result.title}" (id: ${result.id})`
+        }],
+        structuredContent: result as unknown as Record<string, unknown>
+      };
+    }
   );
 
   // ── Write tools (10) ─────────────────────────────────────────────────────────
@@ -205,25 +217,13 @@ export function createMcpServer(auth: AuthContext) {
   );
 
   server.registerTool(
-    'ingest_notion_page',
+    'random_resurface',
     {
-      description: 'Ingest a single Notion page into your BrainTube corpus. Accepts a full Notion URL or raw page UUID. Extracts title + body text, upserts to items table, and immediately generates an embedding. Requires set_notion_api_key first.',
-      inputSchema: z.object({
-        page_url:  z.string().min(1).describe('Notion page URL (e.g. https://notion.so/My-Page-abc123) or raw UUID'),
-        force_new: z.boolean().default(false).describe('Skip dedup and always insert as new item')
-      }),
-      annotations: { readOnlyHint: false, idempotentHint: true }
+      description: 'Surface forgotten items from your corpus using weighted randomness — items you\'ve retrieved least often are most likely to appear. Great for spaced repetition and rediscovering old saves.',
+      inputSchema: resurfaceSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
     },
-    async (input) => {
-      const result = await ingestNotionPage(input.page_url, auth.userId, input.force_new);
-      return {
-        content: [{
-          type: 'text' as const,
-          text: `Notion page ${result.action}: "${result.title}" (id: ${result.id})`
-        }],
-        structuredContent: result as unknown as Record<string, unknown>
-      };
-    }
+    (input) => randomResuface(input, auth.userId)
   );
 
   server.registerTool(
