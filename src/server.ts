@@ -27,7 +27,7 @@ import type { AuthContext } from './types.js';
 export function createMcpServer(auth: AuthContext) {
   const server = new McpServer({
     name: 'braintube-mcp',
-    version: '3.7.0',
+    version: '3.8.0',
   });
 
   // ── Core read tools (1-4) ─────────────────────────────────────────────────────

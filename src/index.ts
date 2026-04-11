@@ -5,6 +5,8 @@ import { createMcpServer } from './server.js';
 import { getAuthContext } from './auth/jwt.js';
 import { handleObsidianSync } from './routes/obsidian-sync.js';
 import { oauthRouter } from './routes/oauth.js';
+import { restRouter } from './routes/rest.js';
+import { buildOpenApiSpec } from './routes/openapi.js';
 import { ingestContent } from './tools/ingest.js';
 import { summariseConversation } from './tools/summarise.js';
 import { backfillEmbeddings } from './tools/embedding.js';
@@ -17,12 +19,14 @@ app.use(express.urlencoded({ extended: false })); // needed for OAuth login form
 // ─── CORS for browser extension and dashboard origins ─────────────────────────
 app.use((req, res, next) => {
   const origin = req.headers.origin ?? '';
-  // Allow chrome/firefox extensions and the BrainTube web app
+  // Allow chrome/firefox extensions, the BrainTube web app, and local dev
   if (
     origin.startsWith('chrome-extension://') ||
     origin.startsWith('moz-extension://') ||
     origin === 'https://brain-tube.com' ||
-    origin === 'https://www.brain-tube.com'
+    origin === 'https://www.brain-tube.com' ||
+    origin.startsWith('http://localhost:') ||
+    origin.startsWith('http://127.0.0.1:')
   ) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -77,10 +81,25 @@ app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     service: 'braintube-mcp',
-    version: '3.6.0',
+    version: '3.8.0',
     timestamp: new Date().toISOString()
   });
 });
+
+// ─── OpenAPI spec (public — no auth required) ────────────────────────────────
+app.get('/openapi.json', (req, res) => {
+  const proto = req.headers['x-forwarded-proto'] ?? req.protocol;
+  const host  = process.env.RAILWAY_PUBLIC_DOMAIN
+    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+    : `${proto}://${req.headers.host}`;
+  res.json(buildOpenApiSpec(host));
+});
+
+// ─── REST API layer ───────────────────────────────────────────────────────────
+// All routes require auth + rate limiting (applied here, not in the router itself).
+// Existing specific /api/* routes (extension-ingest, backfill, obsidian-sync)
+// are registered after and take precedence for their exact paths.
+app.use('/api', requireAuth, mcpRateLimit, restRouter);
 
 // ─── MCP endpoints ────────────────────────────────────────────────────────────
 app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
