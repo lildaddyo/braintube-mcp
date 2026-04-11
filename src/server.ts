@@ -21,6 +21,7 @@ import { sessionBriefSchema, getSessionBrief } from './tools/session-brief.js';
 import { listBookmarksSchema, listBookmarks, toggleBookmarkSchema, toggleBookmark } from './tools/bookmarks.js';
 import { searchObsidianSchema, searchObsidian } from './tools/obsidian-search.js';
 import { chatWithBrainSchema, chatWithBrain, listBrainsSchema, listBrains } from './tools/brain-chat.js';
+import { requireCredits } from './lib/credits.js';
 import { dbAdmin } from './db/supabase.js';
 import type { AuthContext } from './types.js';
 
@@ -40,7 +41,10 @@ export function createMcpServer(auth: AuthContext) {
       inputSchema: searchSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
-    (input) => searchKnowledge(input, auth.userId)
+    async (input) => {
+      await requireCredits(auth.userId, 'ai_search', 'search_knowledge');
+      return searchKnowledge(input, auth.userId);
+    }
   );
 
   server.registerTool(
@@ -92,7 +96,10 @@ export function createMcpServer(auth: AuthContext) {
       inputSchema: searchBySourceSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
-    (input) => searchBySource(input, auth.userId)
+    async (input) => {
+      await requireCredits(auth.userId, 'ai_search', 'search_by_source');
+      return searchBySource(input, auth.userId);
+    }
   );
 
   server.registerTool(
@@ -102,7 +109,10 @@ export function createMcpServer(auth: AuthContext) {
       inputSchema: searchByDateSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
-    (input) => searchByDate(input, auth.userId)
+    async (input) => {
+      await requireCredits(auth.userId, 'ai_search', 'search_by_date_range');
+      return searchByDate(input, auth.userId);
+    }
   );
 
   server.registerTool(
@@ -188,7 +198,10 @@ export function createMcpServer(auth: AuthContext) {
       inputSchema: expertiseProfileSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
-    (input) => getExpertiseProfileTool(input, auth.userId)
+    async (input) => {
+      await requireCredits(auth.userId, 'ai_search', 'get_expertise_profile');
+      return getExpertiseProfileTool(input, auth.userId);
+    }
   );
 
   server.registerTool(
@@ -198,7 +211,10 @@ export function createMcpServer(auth: AuthContext) {
       inputSchema: sessionBriefSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
-    (input) => getSessionBrief(input, auth.userId)
+    async (input) => {
+      await requireCredits(auth.userId, 'ai_chat', 'get_session_brief');
+      return getSessionBrief(input, auth.userId);
+    }
   );
 
   // ── Ingest tools (14-15) ──────────────────────────────────────────────────────
@@ -365,7 +381,10 @@ export function createMcpServer(auth: AuthContext) {
       inputSchema: chatWithBrainSchema,
       annotations: { readOnlyHint: true, openWorldHint: true }
     },
-    (input) => chatWithBrain(input)
+    async (input) => {
+      await requireCredits(auth.userId, 'ai_chat', 'chat_with_brain');
+      return chatWithBrain(input);
+    }
   );
 
   server.registerTool(
