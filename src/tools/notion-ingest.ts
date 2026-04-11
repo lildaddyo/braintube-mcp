@@ -11,6 +11,18 @@ import { embedItem } from './embedding.js';
 // ─── Notion client factory ────────────────────────────────────────────────────
 
 export async function getNotionClient(userId: string): Promise<Client> {
+  // 1. Try OAuth token from notion_connections (preferred)
+  const { data: oauthConn } = await dbAdmin
+    .from('notion_connections')
+    .select('access_token')
+    .eq('user_id', userId)
+    .single();
+
+  if (oauthConn?.access_token) {
+    return new Client({ auth: oauthConn.access_token });
+  }
+
+  // 2. Fall back to legacy API key from user_settings
   const { data, error } = await dbAdmin
     .from('user_settings')
     .select('setting_value')
@@ -19,7 +31,7 @@ export async function getNotionClient(userId: string): Promise<Client> {
     .single();
 
   if (error || !data?.setting_value) {
-    throw new Error('No Notion API key found. Call set_notion_api_key first.');
+    throw new Error('No Notion connection found. Connect via OAuth at brain-tube.com/settings or use set_notion_api_key.');
   }
 
   return new Client({ auth: data.setting_value });

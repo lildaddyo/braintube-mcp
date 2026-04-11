@@ -6,21 +6,50 @@ import { generateEmbedding } from '../lib/openai.js';
 interface EmbedFields {
   title?: string | null;
   summary?: string | null;
+  summary_oneliner?: string | null;
   tags?: string[] | null;
   channel_name?: string | null; // maps to items.channel
+  // Enrichment metadata — present on items that have been through enrich-metadata
+  topic_primary?: string | null;
+  topic_secondary?: string[] | null;
+  entities?: string[] | null;
+  key_concepts?: string[] | null;
+  content_type?: string | null;
+  domain?: string | null;
 }
 
 /**
  * Build the string that gets embedded for an item.
- * Order: title > channel > tags > summary — most discriminative fields first.
+ *
+ * If enrichment metadata is present (topic_primary set), uses prefix-fusion
+ * format to match the re-embed-batch edge function (embedding_version = 2).
+ * Otherwise falls back to the legacy format (embedding_version = 1).
  */
-export function buildEmbedText(fields: EmbedFields): string {
+export function buildEmbedText(fields: EmbedFields): { text: string; version: 1 | 2 } {
+  if (fields.topic_primary) {
+    // Prefix-fusion path — embedding_version 2
+    const prefixParts: string[] = [];
+    prefixParts.push(`Topic: ${fields.topic_primary}`);
+    if (fields.topic_secondary?.length) prefixParts.push(`Subtopics: ${fields.topic_secondary.join(', ')}`);
+    if (fields.entities?.length)        prefixParts.push(`Entities: ${fields.entities.join(', ')}`);
+    if (fields.key_concepts?.length)    prefixParts.push(`Concepts: ${fields.key_concepts.join(', ')}`);
+    if (fields.content_type)            prefixParts.push(`Type: ${fields.content_type}`);
+    if (fields.domain)                  prefixParts.push(`Domain: ${fields.domain}`);
+
+    const parts: string[] = [`[${prefixParts.join(' | ')}]`];
+    if (fields.title)            parts.push(fields.title.trim());
+    if (fields.summary_oneliner) parts.push(fields.summary_oneliner.trim());
+    if (fields.summary)          parts.push(fields.summary.trim());
+    return { text: parts.join('\n'), version: 2 };
+  }
+
+  // Legacy path — embedding_version 1
   const parts: string[] = [];
   if (fields.title)        parts.push(fields.title.trim());
   if (fields.channel_name) parts.push(`Channel: ${fields.channel_name.trim()}`);
   if (fields.tags?.length) parts.push(`Tags: ${fields.tags.join(', ')}`);
   if (fields.summary)      parts.push(fields.summary.trim());
-  return parts.join('\n');
+  return { text: parts.join('\n'), version: 1 };
 }
 
 // ─── Single item embed ────────────────────────────────────────────────────────
@@ -30,10 +59,10 @@ export function buildEmbedText(fields: EmbedFields): string {
  * and write it back to items.embedding + items.last_embedded_at.
  */
 export async function embedItem(itemId: string): Promise<void> {
-  // Fetch fields needed for embed text, plus existing tags via join
+  // Fetch core fields + enrichment metadata
   const { data: item, error } = await dbAdmin
     .from('items')
-    .select('id, title, summary, channel')
+    .select('id, title, summary, summary_oneliner, channel, topic_primary, topic_secondary, entities, key_concepts, content_type, domain')
     .eq('id', itemId)
     .single();
 
@@ -49,11 +78,18 @@ export async function embedItem(itemId: string): Promise<void> {
     .map(r => (r.tags as unknown as { name: string } | null)?.name)
     .filter((n): n is string => !!n);
 
-  const text = buildEmbedText({
+  const { text, version } = buildEmbedText({
     title: item.title,
     summary: item.summary,
+    summary_oneliner: item.summary_oneliner,
     tags,
-    channel_name: item.channel
+    channel_name: item.channel,
+    topic_primary: item.topic_primary,
+    topic_secondary: item.topic_secondary,
+    entities: item.entities,
+    key_concepts: item.key_concepts,
+    content_type: item.content_type,
+    domain: item.domain,
   });
 
   if (!text.trim()) return; // nothing to embed
@@ -64,6 +100,7 @@ export async function embedItem(itemId: string): Promise<void> {
     .from('items')
     .update({
       embedding,
+      embedding_version: version,
       last_embedded_at: new Date().toISOString()
     })
     .eq('id', itemId);

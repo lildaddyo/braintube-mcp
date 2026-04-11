@@ -38,8 +38,12 @@ export async function searchObsidian(
   const bridgeUrl = process.env.OBSIDIAN_BRIDGE_URL?.replace(/\/$/, '');
   const apiKey    = process.env.OBSIDIAN_API_KEY;
 
-  if (!bridgeUrl) throw new Error('OBSIDIAN_BRIDGE_URL is not set. Add it to Railway env vars.');
-  if (!apiKey)    throw new Error('OBSIDIAN_API_KEY is not set. Add it to Railway env vars.');
+  if (!bridgeUrl || !apiKey) {
+    return {
+      content: [{ type: 'text' as const, text: 'Obsidian bridge not configured. Set OBSIDIAN_BRIDGE_URL and OBSIDIAN_API_KEY env vars on Railway.' }],
+      structuredContent: { results: [], message: 'Obsidian bridge not configured. Set OBSIDIAN_BRIDGE_URL and OBSIDIAN_API_KEY env vars on Railway.' },
+    };
+  }
 
   const url = `${bridgeUrl}/search/simple/?query=${encodeURIComponent(input.query)}&contextLength=200`;
 
