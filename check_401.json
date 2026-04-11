@@ -1,0 +1,1 @@
+{"error":"Unauthorized","message":"Provide a valid BrainTube JWT via Authorization: Bearer <token> or X-BrainTube-Token header"}

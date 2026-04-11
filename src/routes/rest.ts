@@ -21,6 +21,7 @@ import { addNote } from '../tools/note.js';
 import { searchBySource } from '../tools/search-by-source.js';
 import { searchByDate } from '../tools/search-by-date.js';
 import { randomResuface } from '../tools/resurface.js';
+import { chatWithBrain, listBrains } from '../tools/brain-chat.js';
 
 export const restRouter = express.Router();
 
@@ -306,6 +307,35 @@ restRouter.post('/tag/:item_id', async (req, res) => {
   }
   try {
     const result = await tagItem({ item_id, add, remove }, auth(req).userId);
+    res.json(unwrap(result));
+  } catch (e) { send500(res, e); }
+});
+
+/**
+ * GET /api/brains
+ * List all Brains owned by the authenticated user.
+ */
+restRouter.get('/brains', async (req, res) => {
+  try {
+    const result = await listBrains({}, auth(req).userId);
+    res.json(unwrap(result));
+  } catch (e) { send500(res, e); }
+});
+
+/**
+ * POST /api/brain-chat/:slug
+ * Body: { question: string, chat_history?: [{role, content}][], session_id?: string }
+ * Query a public Brain by its slug.
+ */
+restRouter.post('/brain-chat/:slug', async (req, res) => {
+  const brain_slug = req.params.slug;
+  const { question, chat_history, session_id } = req.body ?? {};
+  if (!question || typeof question !== 'string') {
+    res.status(400).json({ error: '"question" string is required' });
+    return;
+  }
+  try {
+    const result = await chatWithBrain({ brain_slug, question, chat_history, session_id });
     res.json(unwrap(result));
   } catch (e) { send500(res, e); }
 });

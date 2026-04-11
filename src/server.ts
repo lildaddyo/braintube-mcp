@@ -20,6 +20,7 @@ import { expertiseProfileSchema, getExpertiseProfileTool } from './tools/experti
 import { sessionBriefSchema, getSessionBrief } from './tools/session-brief.js';
 import { listBookmarksSchema, listBookmarks, toggleBookmarkSchema, toggleBookmark } from './tools/bookmarks.js';
 import { searchObsidianSchema, searchObsidian } from './tools/obsidian-search.js';
+import { chatWithBrainSchema, chatWithBrain, listBrainsSchema, listBrains } from './tools/brain-chat.js';
 import { dbAdmin } from './db/supabase.js';
 import type { AuthContext } from './types.js';
 
@@ -27,7 +28,7 @@ import type { AuthContext } from './types.js';
 export function createMcpServer(auth: AuthContext) {
   const server = new McpServer({
     name: 'braintube-mcp',
-    version: '3.8.0',
+    version: '3.9.0',
   });
 
   // ── Core read tools (1-4) ─────────────────────────────────────────────────────
@@ -343,7 +344,7 @@ export function createMcpServer(auth: AuthContext) {
     }
   );
 
-  // ── Phase 5 tools (23) ───────────────────────────────────────────────────────
+  // ── Phase 5 tools (21-23) ────────────────────────────────────────────────────
 
   server.registerTool(
     'search_obsidian',
@@ -353,6 +354,28 @@ export function createMcpServer(auth: AuthContext) {
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => searchObsidian(input)
+  );
+
+  // ── Phase 6 tools (24-25) ────────────────────────────────────────────────────
+
+  server.registerTool(
+    'chat_with_brain',
+    {
+      description: 'Ask a question to a public BrainTube Brain (a curated knowledge base built from someone\'s corpus). Pass the brain_slug (visible in the Brain\'s URL), your question, and optionally prior chat_history for multi-turn conversations. Returns answer + source citations.',
+      inputSchema: chatWithBrainSchema,
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    (input) => chatWithBrain(input)
+  );
+
+  server.registerTool(
+    'list_brains',
+    {
+      description: 'List all Brains you have created. Returns slug, name, description, item count, tier (free/pro), and visibility (public/private). Use the slug with chat_with_brain to query a specific Brain.',
+      inputSchema: listBrainsSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => listBrains(input, auth.userId)
   );
 
   // ── MCP Prompt: session_start ─────────────────────────────────────────────────

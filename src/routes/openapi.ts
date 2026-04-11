@@ -8,7 +8,7 @@ export function buildOpenApiSpec(baseUrl: string) {
     openapi: '3.0.3',
     info: {
       title: 'BrainTube REST API',
-      version: '3.8.0',
+      version: '3.9.0',
       description: 'Personal knowledge corpus API. All endpoints require a Supabase JWT via `Authorization: Bearer <token>`. Mirrors the BrainTube MCP tool set over plain HTTP for use by web apps, mobile clients, and chat widgets.',
       contact: { url: 'https://brain-tube.com' },
     },
@@ -362,6 +362,99 @@ export function buildOpenApiSpec(baseUrl: string) {
           },
           responses: {
             200: { description: 'Updated tag list', content: { 'application/json': { schema: { type: 'object' } } } },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/api/brains': {
+        get: {
+          operationId: 'listBrains',
+          summary: 'List user\'s Brains',
+          description: 'Returns all Brains owned by the authenticated user, ordered by item count descending.',
+          tags: ['Brains'],
+          responses: {
+            200: {
+              description: 'Brain list',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      brains: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            slug:        { type: 'string' },
+                            name:        { type: 'string' },
+                            description: { type: 'string', nullable: true },
+                            item_count:  { type: 'integer' },
+                            tier:        { type: 'string' },
+                            is_public:   { type: 'boolean' },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { description: 'Unauthorized' },
+          },
+        },
+      },
+      '/api/brain-chat/{slug}': {
+        post: {
+          operationId: 'chatWithBrain',
+          summary: 'Chat with a public Brain',
+          description: 'Ask a question to a BrainTube Brain. Returns an answer with source citations. No extra auth required beyond the standard bearer token.',
+          tags: ['Brains'],
+          parameters: [
+            { name: 'slug', in: 'path', required: true, schema: { type: 'string' }, description: 'Brain slug from its URL' },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['question'],
+                  properties: {
+                    question:     { type: 'string', minLength: 1 },
+                    chat_history: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        required: ['role', 'content'],
+                        properties: {
+                          role:    { type: 'string', enum: ['user', 'assistant'] },
+                          content: { type: 'string' },
+                        },
+                      },
+                    },
+                    session_id: { type: 'string', description: 'Continue an existing conversation thread' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: 'Brain answer',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      answer:     { type: 'string' },
+                      sources:    { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, url: { type: 'string', nullable: true } } } },
+                      session_id: { type: 'string', nullable: true },
+                    },
+                  },
+                },
+              },
+            },
+            400: { description: 'Missing question', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
             401: { description: 'Unauthorized' },
           },
         },
