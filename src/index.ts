@@ -1,5 +1,6 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
+import { randomUUID } from 'crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createMcpServer } from './server.js';
 import { getAuthContext } from './auth/jwt.js';
@@ -81,7 +82,7 @@ app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     service: 'braintube-mcp',
-    version: '3.9.0',
+    version: '3.9.2',
     timestamp: new Date().toISOString()
   });
 });
@@ -101,23 +102,75 @@ app.get('/openapi.json', (req, res) => {
 // are registered after and take precedence for their exact paths.
 app.use('/api', requireAuth, mcpRateLimit, restRouter);
 
+// ─── MCP session store ────────────────────────────────────────────────────────
+// Maps Mcp-Session-Id → live transport so that tools/list, tools/call, etc.
+// hit the same McpServer instance that handled `initialize`.
+// Without this, each POST creates a fresh uninitialized server and tools/list
+// returns [] because the MCP state machine rejects calls before initialize.
+const mcpSessions = new Map<string, StreamableHTTPServerTransport>();
+
+// Prune the session store hourly to avoid unbounded memory growth on Railway.
+setInterval(() => {
+  const before = mcpSessions.size;
+  mcpSessions.clear();
+  if (before > 0) console.log(`[mcp] session store pruned (${before} sessions evicted)`);
+}, 60 * 60 * 1000).unref();
+
 // ─── MCP endpoints ────────────────────────────────────────────────────────────
+
 app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
   const auth = (req as express.Request & { auth: AuthContext }).auth;
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+
+  // Re-use an existing session if the client provides Mcp-Session-Id.
+  // Express lower-cases incoming headers, so the key is 'mcp-session-id'.
+  const incomingSessionId = req.headers['mcp-session-id'] as string | undefined;
+  if (incomingSessionId) {
+    const existing = mcpSessions.get(incomingSessionId);
+    if (existing) {
+      await existing.handleRequest(req, res, req.body);
+      return;
+    }
+    // Unknown session — client must re-initialize (e.g. after server restart).
+    res.status(404).json({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Session not found — please re-initialize.' },
+      id: null,
+    });
+    return;
+  }
+
+  // New session: create transport + server, wire up session callbacks.
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+    onsessioninitialized: (sessionId) => {
+      mcpSessions.set(sessionId, transport);
+      console.log(`[mcp] session created (${sessionId}) — ${mcpSessions.size} active`);
+    },
+  });
+
+  transport.onclose = () => {
+    if (transport.sessionId) {
+      mcpSessions.delete(transport.sessionId);
+      console.log(`[mcp] session closed (${transport.sessionId}) — ${mcpSessions.size} active`);
+    }
+  };
+
   const server = createMcpServer(auth);
-  res.on('close', () => transport.close());
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 });
 
 app.get('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
-  const auth = (req as express.Request & { auth: AuthContext }).auth;
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  const server = createMcpServer(auth);
-  res.on('close', () => transport.close());
-  await server.connect(transport);
-  await transport.handleRequest(req, res);
+  // GET is used by clients that open a persistent SSE stream for server→client pushes.
+  const incomingSessionId = req.headers['mcp-session-id'] as string | undefined;
+  if (incomingSessionId) {
+    const existing = mcpSessions.get(incomingSessionId);
+    if (existing) {
+      await existing.handleRequest(req, res);
+      return;
+    }
+  }
+  res.status(400).json({ error: 'Mcp-Session-Id header required for SSE stream.' });
 });
 
 // ─── Personal MCP URL info ────────────────────────────────────────────────────
