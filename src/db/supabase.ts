@@ -251,7 +251,7 @@ export async function countIngestsToday(userId: string): Promise<number> {
   return count ?? 0;
 }
 
-// ─── Semantic search via pgvector RPC ─────────────────────────────────────────
+// ─── Semantic search via pgvector RPC (legacy — kept for search-by-source, search-by-date) ──
 
 export interface SemanticResult {
   id: string;
@@ -268,9 +268,9 @@ export interface SemanticResult {
 }
 
 /**
- * Call the search_knowledge_semantic RPC.
- * Takes a pre-computed embedding (number[]) and returns ranked results.
- * RPC signature: (query_embedding vector, match_user_id uuid, match_count int, similarity_threshold float8)
+ * Call the search_knowledge_semantic RPC (pure vector similarity).
+ * Used by search-by-source and search-by-date tools.
+ * For the main search_knowledge tool, use hybridSearchRpc instead.
  */
 export async function semanticSearchRpc(
   embedding: number[],
@@ -299,4 +299,61 @@ export async function semanticSearchRpc(
   }
 
   return rows.map((row: SemanticResult) => ({ ...row, match_type: 'semantic' as const }));
+}
+
+// ─── Hybrid search RPC (vector + full-text, RRF-ranked) ───────────────────────
+
+export interface HybridResult {
+  id: string;
+  title: string;
+  summary: string | null;
+  source_type: string;
+  source_url: string | null;
+  channel_name: string | null;
+  tags: string[] | null;
+  saved_at: string;
+  similarity: number;   // combined RRF score from the RPC
+  match_type: 'hybrid';
+  taint_level?: number;
+}
+
+/**
+ * Call the hybrid_search RPC — combines pgvector similarity with
+ * Postgres full-text search (tsvector), ranked via Reciprocal Rank Fusion.
+ *
+ * RPC signature:
+ *   hybrid_search(
+ *     search_query     text,
+ *     query_embedding  vector,
+ *     filter_user_id   uuid,
+ *     match_count      int
+ *   )
+ */
+export async function hybridSearchRpc(
+  query: string,
+  embedding: number[],
+  userId: string,
+  limit = 10
+): Promise<HybridResult[]> {
+  console.log(`[hybridSearchRpc] query="${query.slice(0, 80)}", dims=${embedding.length}, limit=${limit}`);
+
+  const { data, error } = await dbAdmin.rpc('hybrid_search', {
+    search_query:    query,
+    query_embedding: embedding,
+    filter_user_id:  userId,
+    match_count:     limit,
+  });
+
+  if (error) {
+    console.error('[hybridSearchRpc] RPC error:', error.message, error);
+    throw new Error(`Hybrid search RPC failed: ${error.message}`);
+  }
+
+  const rows = (data ?? []) as HybridResult[];
+  console.log(`[hybridSearchRpc] returned ${rows.length} rows`);
+  if (rows.length > 0) {
+    console.log(`[hybridSearchRpc] top score=${rows[0].similarity?.toFixed(4)}, bottom=${rows[rows.length - 1].similarity?.toFixed(4)}`);
+  }
+
+  return rows.map(row => ({ ...row, match_type: 'hybrid' as const }));
 }
