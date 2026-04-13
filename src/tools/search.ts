@@ -22,8 +22,8 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
   // ── Hybrid path (vector + full-text RRF) ─────────────────────────────────────
   if (queryLongEnough && hasApiKey) {
     try {
-      console.log('[search] generating query embedding for hybrid_search…');
-      const embedding = await generateEmbedding(query);
+      console.log('[search] generating 768-dim query embedding for hybrid_search…');
+      const embedding = await generateEmbedding(query, 768);
       console.log(`[search] embedding generated, dims=${embedding.length}`);
 
       const results = await hybridSearchRpc(query, embedding, userId, limit);
