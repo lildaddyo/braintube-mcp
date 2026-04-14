@@ -156,7 +156,7 @@ app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
     }
   };
 
-  const server = createMcpServer(auth);
+  const server = await createMcpServer(auth);
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 });
