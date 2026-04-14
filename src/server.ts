@@ -45,10 +45,23 @@ import { detectInjection, logInjectionAttempt } from './security/injection.js';
 import { auditLog } from './lib/audit.js';
 import { sanitizeToolDescription, auditToolDescriptions } from './security/sanitize-tool-metadata.js';
 import type { ToolMeta } from './security/sanitize-tool-metadata.js';
+import {
+  getRequiredTier,
+  tierGrantsAccess,
+  resolveUserRole,
+  logAccessDenied,
+} from './security/tool-access.js';
+import type { UserRole } from './security/tool-access.js';
 import type { AuthContext } from './types.js';
 
 // Every tool call is scoped to the authenticated user
-export function createMcpServer(auth: AuthContext) {
+export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
+  // ── Resolve user role ONCE per session ──────────────────────────────────────
+  // Queried here so the result is available synchronously inside secureWrap
+  // and the tool registration proxy without an extra DB round-trip per call.
+  const userRole: UserRole = await resolveUserRole(auth.userId);
+  console.log(`[rbac] session for ${auth.userId} — role: ${userRole}`);
+
   const server = new McpServer({
     name: 'braintube-mcp',
     version: '3.9.0',
@@ -141,15 +154,32 @@ export function createMcpServer(auth: AuthContext) {
 
   /**
    * Security wrapper applied to EVERY tool handler:
-   *   1. Injection scan on all string inputs
-   *   2. Require confirm:true for destructive batch writes
+   *   0. Role check      — deny if user's tier is insufficient (defense-in-depth)
+   *   1. Injection scan  — NFKD + zero-width + regex on all string inputs
+   *   2. Write confirm   — 6 destructive tools require confirm:true
    *   3. Execute handler
-   *   4. Sanitize response text (prefix with warning if injection patterns found)
+   *   4. Sanitize response text (prefix warning if injection patterns found)
    *   5. Fire-and-forget audit log
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function secureWrap(toolName: string, handler: (input: any) => unknown) {
     return async (input: Record<string, unknown>): Promise<unknown> => {
+
+      // ── 0. Role / tier check ────────────────────────────────────────────────
+      // Primary enforcement is at registration time (tools not visible to the user
+      // if their role is insufficient).  This check is a defense-in-depth layer
+      // in case a crafted request bypasses the filtered tools/list.
+      const requiredTier = getRequiredTier(toolName);
+      if (!tierGrantsAccess(userRole, requiredTier)) {
+        logAccessDenied(auth.userId, toolName, requiredTier, userRole);
+        auditLog(auth.userId, toolName, input, false);
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `[ACCESS DENIED] Tool \`${toolName}\` requires \`${requiredTier}\` access. Your role: \`${userRole}\`. Please upgrade your BrainTube plan to use this tool.`,
+          }],
+        };
+      }
 
       // ── 1. Injection detection ──────────────────────────────────────────────
       for (const s of extractStrings(input)) {
@@ -230,9 +260,11 @@ export function createMcpServer(auth: AuthContext) {
 
   /**
    * Proxy server.registerTool so every tool automatically gets:
+   *   - Role-based filtering: tools the user can't access are NOT registered
+   *     (so they don't appear in tools/list, not just blocked at call time)
    *   - Description sanitization (strip zero-width chars, HTML, ChatML tokens, override phrases)
    *   - confirm:boolean schema extension for the 6 destructive tools
-   *   - secureWrap on the handler (injection check + write confirm + audit + output sanitize)
+   *   - secureWrap on the handler (role check + injection scan + write confirm + audit + output sanitize)
    *
    * Also collects {name, description} of every registered tool into registeredToolMeta
    * so we can run the startup audit after all tools are registered.
@@ -242,6 +274,14 @@ export function createMcpServer(auth: AuthContext) {
   const _origRegister = server.registerTool.bind(server);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (server as any).registerTool = (name: string, def: any, handler: (input: any) => unknown) => {
+    // ── Role filter: skip registration if user's tier is insufficient ────────
+    const requiredTier = getRequiredTier(name);
+    if (!tierGrantsAccess(userRole, requiredTier)) {
+      // Tool is invisible to this user — not in tools/list, not callable.
+      console.log(`[rbac] skipping registration of "${name}" (requires ${requiredTier}, user has ${userRole})`);
+      return;
+    }
+
     let securedDef = def;
 
     // ── Sanitize tool description ────────────────────────────────────────────
