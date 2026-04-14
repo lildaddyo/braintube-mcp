@@ -37,7 +37,7 @@ export function tierGrantsAccess(userRole: UserRole, requiredTier: ToolTier): bo
 }
 
 // ─── Tool access map ──────────────────────────────────────────────────────────
-// All 42 registered tools.  Any tool NOT listed here defaults to 'authenticated'.
+// All 45 registered tools.  Any tool NOT listed here defaults to 'authenticated'.
 
 export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   // ── Authenticated (safe read-only — available to every logged-in user) ─────
@@ -81,12 +81,22 @@ export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   export_claude_md:       'premium',
 
   // ── Admin (destructive / system-level operations) ─────────────────────────
-  bulk_ingest:            'admin',
-  ingest_notion_database: 'admin',
-  backfill_embeddings:    'admin',
-  recompute_salience:     'admin',
-  compute_centrality:     'admin',
-  generate_api_key:       'admin',
+  bulk_ingest:                    'admin',
+  ingest_notion_database:         'admin',
+  backfill_embeddings:            'admin',
+  recompute_salience:             'admin',
+  compute_centrality:             'admin',
+  generate_api_key:               'admin',
+  security_dashboard:             'admin',
+  acknowledge_security_alert:     'admin',
+  suppress_alert_type:            'admin',
+
+  // ── Firewall management (admin-only) ──────────────────────────────────────
+  firewall_status:                'admin',
+  firewall_promote_check:         'admin',
+  firewall_update_threshold:      'admin',
+  firewall_rollback_rules:        'admin',
+  firewall_rule_history:          'admin',
 };
 
 /** Return the required tier for a tool.  Defaults to 'authenticated' for unknown tools. */

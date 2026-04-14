@@ -39,6 +39,18 @@ import { retrievalQualitySchema, retrievalQuality } from './tools/retrieval-qual
 import { edgeHistorySchema, getEdgeHistory } from './tools/edge-history.js';
 import { findPathSchema, findPath } from './tools/path.js';
 import { computeCentralitySchema, computeCentrality } from './tools/centrality.js';
+import {
+  securityDashboardSchema, securityDashboard,
+  acknowledgeAlertSchema, acknowledgeSecurityAlert,
+  suppressAlertSchema, suppressAlertType,
+} from './tools/security-admin.js';
+import {
+  firewallStatusSchema, firewallStatus,
+  firewallPromoteCheckSchema, firewallPromoteCheck,
+  firewallUpdateThresholdSchema, firewallUpdateThreshold,
+  firewallRollbackRulesSchema, firewallRollbackRules,
+  firewallRuleHistorySchema, firewallRuleHistory,
+} from './tools/firewall-admin.js';
 import { requireCredits } from './lib/credits.js';
 import { dbAdmin } from './db/supabase.js';
 import { detectInjection, logInjectionAttempt } from './security/injection.js';
@@ -801,7 +813,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     (input) => mostRetrieved(input, auth.userId)
   );
 
-  // ── Phase 9 tools (36-42) ────────────────────────────────────────────────────
+  // ── Phase 9 tools (36-45) ────────────────────────────────────────────────────
 
   server.registerTool(
     'export_claude_md',
@@ -874,6 +886,90 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => getEdgeHistory(input)
+  );
+
+  // ── Security admin tools (43-45) ─────────────────────────────────────────────
+
+  server.registerTool(
+    'security_dashboard',
+    {
+      description: 'Get current security alert status: unacknowledged alerts, recent security events (24h), taint distribution, active canary triggers, active alert suppressions, and 7-day retrieval quality metrics. Admin only.',
+      inputSchema: securityDashboardSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (_input) => securityDashboard(_input)
+  );
+
+  server.registerTool(
+    'acknowledge_security_alert',
+    {
+      description: 'Acknowledge a security alert by UUID, marking it as resolved. Optionally attach resolution notes. Admin only.',
+      inputSchema: acknowledgeAlertSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+    },
+    (input) => acknowledgeSecurityAlert(input)
+  );
+
+  server.registerTool(
+    'suppress_alert_type',
+    {
+      description: 'Temporarily suppress a specific alert type for maintenance windows. Duration 1–168 hours (max 7 days). Requires a reason. Admin only.',
+      inputSchema: suppressAlertSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    (input) => suppressAlertType(input)
+  );
+
+  // ── Firewall management tools (46-50) ────────────────────────────────────────
+
+  server.registerTool(
+    'firewall_status',
+    {
+      description: 'Get LLM firewall status — analytics (7d), shadow mode state, active rule versions, and adaptive threshold recommendations (30d). Admin only.',
+      inputSchema: firewallStatusSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (_input) => firewallStatus(_input)
+  );
+
+  server.registerTool(
+    'firewall_promote_check',
+    {
+      description: 'Promote a firewall check from shadow mode to enforcement (will block/modify), or demote back to shadow (log only). Available checks: toxicity, topic_boundary, conversation_risk, token_budget, ingress_probe, exfiltration, policy_compliance. Admin only.',
+      inputSchema: firewallPromoteCheckSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    (input) => firewallPromoteCheck(input)
+  );
+
+  server.registerTool(
+    'firewall_update_threshold',
+    {
+      description: 'Update a firewall threshold value with automatic versioning. Thresholds: conversation_risk_warn, conversation_risk_block, grounding_minimum, grounding_writeback_gate, exfiltration_entity_limit, exfiltration_yesno_ratio. Admin only.',
+      inputSchema: firewallUpdateThresholdSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+    },
+    (input) => firewallUpdateThreshold(input)
+  );
+
+  server.registerTool(
+    'firewall_rollback_rules',
+    {
+      description: 'Rollback firewall rules (thresholds, shadow_config, etc.) to a previous version. List available versions first with firewall_rule_history. Admin only.',
+      inputSchema: firewallRollbackRulesSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false }
+    },
+    (input) => firewallRollbackRules(input)
+  );
+
+  server.registerTool(
+    'firewall_rule_history',
+    {
+      description: 'View version history for a firewall rule type (thresholds, shadow_config, injection_patterns, pii_patterns, toxicity_patterns, homoglyph_map, token_limits). Shows version number, description, changed_by, and active status. Admin only.',
+      inputSchema: firewallRuleHistorySchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => firewallRuleHistory(input)
   );
 
   // ── MCP Prompt: session_start ─────────────────────────────────────────────────
