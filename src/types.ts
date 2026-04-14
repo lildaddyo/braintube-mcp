@@ -47,4 +47,5 @@ export interface AuthContext {
   userId: string;
   email?: string;
   authMethod: 'jwt' | 'apikey';
+  rawToken?: string;
 }

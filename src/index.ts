@@ -41,16 +41,17 @@ app.use((req, res, next) => {
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 
 // ─── Rate limiting ────────────────────────────────────────────────────────────
-// Keyed on userId so each user gets their own 100 req/min bucket
+// Keyed on userId so each user gets their own independent bucket.
+// 60 tool calls per user per 15-minute rolling window.
+// Auth middleware always runs first, so auth.userId is present when limit fires.
 const mcpRateLimit = rateLimit({
-  windowMs: 60 * 1000,
-  limit: 100,
-  // Auth middleware always runs first, so auth.userId is always present here
+  windowMs: 15 * 60 * 1000,   // 15 minutes
+  limit: 60,                   // 60 tool calls per window per user
   keyGenerator: (req) => (req as express.Request & { auth?: AuthContext }).auth?.userId ?? 'unauthenticated',
   skip: (req) => !(req as express.Request & { auth?: AuthContext }).auth,
   validate: { xForwardedForHeader: false },
-  message: { error: 'Too Many Requests', message: 'Rate limit: 100 requests per minute per user' },
-  standardHeaders: true,
+  message: { error: 'Rate Limited', message: 'Rate limit: 60 tool calls per 15 minutes per user. Please wait before retrying.' },
+  standardHeaders: true,   // sends RateLimit-* headers so clients can back off
   legacyHeaders: false
 });
 

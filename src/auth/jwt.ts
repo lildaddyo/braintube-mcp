@@ -9,6 +9,7 @@ export interface AuthContext {
   userId: string;
   email?: string;
   authMethod: 'jwt' | 'apikey';
+  rawToken?: string; // original JWT — forwarded to edge functions that require user auth
 }
 
 // Validate a Supabase JWT via the Auth API (no local JWT secret needed)
@@ -20,7 +21,8 @@ async function validateJWT(token: string): Promise<AuthContext | null> {
     return {
       userId: data.user.id,
       email: data.user.email,
-      authMethod: 'jwt'
+      authMethod: 'jwt',
+      rawToken: token,
     };
   } catch {
     return null;

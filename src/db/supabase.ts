@@ -357,3 +357,50 @@ export async function hybridSearchRpc(
 
   return rows.map(row => ({ ...row, match_type: 'hybrid' as const }));
 }
+
+// ─── Adaptive search RPC (strategy-aware: keyword_boosted, semantic_boosted, balanced, entity_match) ─
+
+export interface AdaptiveResult {
+  id: string;
+  title: string;
+  summary: string | null;
+  source_type: string;
+  source_url: string | null;
+  channel_name: string | null;
+  tags: string[] | null;
+  saved_at: string;
+  similarity: number;
+  strategy: string;           // keyword_boosted | semantic_boosted | balanced | entity_match
+  centrality_score?: number;  // graph centrality — higher = more connected
+  taint_level?: number;
+}
+
+export async function adaptiveSearchRpc(
+  query: string,
+  embedding: number[],
+  userId: string,
+  limit = 10
+): Promise<AdaptiveResult[]> {
+  console.log(`[adaptiveSearchRpc] query="${query.slice(0, 80)}", dims=${embedding.length}, limit=${limit}`);
+
+  const { data, error } = await dbAdmin.rpc('adaptive_search', {
+    search_query:    query,
+    query_embedding: embedding,
+    filter_user_id:  userId,
+    match_count:     limit,
+  });
+
+  if (error) {
+    console.error('[adaptiveSearchRpc] RPC error:', error.message, error);
+    throw new Error(`Adaptive search RPC failed: ${error.message}`);
+  }
+
+  const rows = (data ?? []) as AdaptiveResult[];
+  console.log(`[adaptiveSearchRpc] returned ${rows.length} rows`);
+  if (rows.length > 0) {
+    const strategies = [...new Set(rows.map(r => r.strategy))].join(', ');
+    console.log(`[adaptiveSearchRpc] strategies=${strategies}, top score=${rows[0].similarity?.toFixed(4)}`);
+  }
+
+  return rows;
+}

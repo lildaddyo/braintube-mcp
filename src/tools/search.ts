@@ -1,7 +1,28 @@
 import { z } from 'zod';
-import { semanticSearch, hybridSearchRpc, incrementRetrievalStats } from '../db/supabase.js';
+import { dbAdmin, semanticSearch, adaptiveSearchRpc, incrementRetrievalStats } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
+import type { AdaptiveResult } from '../db/supabase.js';
+
+async function logRetrieval(
+  userId: string,
+  queryText: string,
+  results: AdaptiveResult[]
+): Promise<void> {
+  try {
+    await dbAdmin.from('retrieval_log').insert({
+      user_id:             userId,
+      query_text:          queryText,
+      retrieved_item_ids:  results.map(r => r.id),
+      rrf_scores:          results.map(r => r.similarity ?? null),
+      match_types:         results.map(r => r.strategy ?? 'adaptive'),
+      result_count:        results.length,
+      search_method:       results[0]?.strategy ?? 'adaptive',
+    });
+  } catch (err) {
+    console.error('[search] retrieval_log insert failed (non-fatal):', err);
+  }
+}
 
 export const searchSchema = z.object({
   query: z.string().min(1).max(500).describe(
@@ -22,29 +43,36 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
   // ── Hybrid path (vector + full-text RRF) ─────────────────────────────────────
   if (queryLongEnough && hasApiKey) {
     try {
-      console.log('[search] generating 768-dim query embedding for hybrid_search…');
+      console.log('[search] generating 768-dim query embedding for adaptive_search…');
       const embedding = await generateEmbedding(query, 768);
       console.log(`[search] embedding generated, dims=${embedding.length}`);
 
-      const results = await hybridSearchRpc(query, embedding, userId, limit);
-      console.log(`[search] hybrid returned ${results.length} results`);
+      const results = await adaptiveSearchRpc(query, embedding, userId, limit);
+      console.log(`[search] adaptive returned ${results.length} results`);
 
       if (results.length > 0) {
         void incrementRetrievalStats(results.map(r => r.id));
-        const withTaintDefault = results.map(r => ({ ...r, taint_level: r.taint_level ?? 0 }));
-        const tainted = wrapWithTaint(withTaintDefault);
+        void logRetrieval(userId, query, results);
+        // Use strategy as match_type so callers can see which retrieval path was used
+        const withMatchType = results.map(r => ({
+          ...r,
+          taint_level:      r.taint_level ?? 0,
+          match_type:       r.strategy ?? 'adaptive',
+          centrality_score: r.centrality_score ?? null,
+        }));
+        const tainted = wrapWithTaint(withMatchType);
         return {
           content: [{ type: 'text' as const, text: formatTaintedResponse(tainted) }],
           structuredContent: tainted as unknown as Record<string, unknown>
         };
       }
-      console.log('[search] hybrid returned 0 results, falling back to keyword');
+      console.log('[search] adaptive returned 0 results, falling back to keyword');
     } catch (err) {
-      console.error('[search] hybrid path threw, falling back to keyword:', err);
+      console.error('[search] adaptive path threw, falling back to keyword:', err);
       // Non-fatal — fall through to ILIKE
     }
   } else {
-    console.log(`[search] skipping hybrid (queryLongEnough=${queryLongEnough}, hasApiKey=${hasApiKey}), using keyword`);
+    console.log(`[search] skipping adaptive (queryLongEnough=${queryLongEnough}, hasApiKey=${hasApiKey}), using keyword`);
   }
 
   // ── Keyword fallback (ILIKE — no API key or hybrid returned nothing) ──────────
