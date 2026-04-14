@@ -11,9 +11,9 @@ export const resurfaceSchema = z.object({
 export async function randomResuface(input: z.infer<typeof resurfaceSchema>, userId: string) {
   const { n } = input;
 
-  const { data, error } = await dbAdmin.rpc('random_resurface_items', {
-    p_user_id: userId,
-    p_limit: n
+  const { data, error } = await dbAdmin.rpc('get_review_queue', {
+    for_user_id: userId,
+    queue_size: n
   });
 
   if (error) throw new Error(`random_resurface failed: ${error.message}`);
@@ -29,6 +29,14 @@ export async function randomResuface(input: z.infer<typeof resurfaceSchema>, use
   }
 
   void incrementRetrievalStats(results.map(r => r.id));
+
+  // Fire-and-forget SM-2 update for each surfaced item (quality=3 = recalled correctly)
+  void Promise.allSettled(
+    results.map(item =>
+      dbAdmin.rpc('sm2_update', { item_uuid: item.id, quality: 3 })
+    )
+  );
+
   const tainted = wrapWithTaint(results);
   return {
     content: [{ type: 'text' as const, text: formatTaintedResponse(tainted) }],

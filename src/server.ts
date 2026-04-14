@@ -21,8 +21,28 @@ import { sessionBriefSchema, getSessionBrief } from './tools/session-brief.js';
 import { listBookmarksSchema, listBookmarks, toggleBookmarkSchema, toggleBookmark } from './tools/bookmarks.js';
 import { searchObsidianSchema, searchObsidian } from './tools/obsidian-search.js';
 import { chatWithBrainSchema, chatWithBrain, listBrainsSchema, listBrains } from './tools/brain-chat.js';
+import { knowledgeGraphSchema, getKnowledgeGraph } from './tools/knowledge-graph.js';
+import { knowledgeHealthSchema, knowledgeHealth } from './tools/knowledge-health.js';
+import { knowledgeIndexSchema, getKnowledgeIndex } from './tools/knowledge-index.js';
+import { compileKnowledgeSchema, compileKnowledge, getConceptArticlesSchema, getConceptArticles } from './tools/concept-articles.js';
+import { exportCorpusSchema, exportCorpus } from './tools/export-corpus.js';
+import {
+  tagCooccurrenceSchema, tagCooccurrence,
+  entityCooccurrenceSchema, entityCooccurrence,
+  detectGapsSchema, detectGaps,
+  mostRetrievedSchema, mostRetrieved,
+} from './tools/analytics.js';
+import { exportClaudeMdSchema, exportClaudeMd } from './tools/claude-md.js';
+import { recomputeSalienceSchema, recomputeSalience } from './tools/salience.js';
+import { deepSearchSchema, deepSearch } from './tools/deep-search.js';
+import { retrievalQualitySchema, retrievalQuality } from './tools/retrieval-quality.js';
+import { edgeHistorySchema, getEdgeHistory } from './tools/edge-history.js';
+import { findPathSchema, findPath } from './tools/path.js';
+import { computeCentralitySchema, computeCentrality } from './tools/centrality.js';
 import { requireCredits } from './lib/credits.js';
 import { dbAdmin } from './db/supabase.js';
+import { detectInjection, logInjectionAttempt } from './security/injection.js';
+import { auditLog } from './lib/audit.js';
 import type { AuthContext } from './types.js';
 
 // Every tool call is scoped to the authenticated user
@@ -31,6 +51,171 @@ export function createMcpServer(auth: AuthContext) {
     name: 'braintube-mcp',
     version: '3.9.0',
   });
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  //  Security Infrastructure — applied to EVERY tool registration below
+  //  via a proxy on server.registerTool.
+  //
+  //  For each tool call:
+  //    1. Injection scan   — NFKD + zero-width + regex on all string inputs
+  //    2. Write confirm    — 6 destructive tools require confirm:true on second call
+  //    3. Audit log        — fire-and-forget SHA-256 hash of params → mcp_audit_log
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  /** Recursively extract string leaf values for injection scanning.
+   *  Limited to MAX_SCAN_STRINGS strings and MAX_SCAN_LEN chars each
+   *  so bulk_ingest with 50 large items doesn't become slow. */
+  const MAX_SCAN_LEN     = 10_000;
+  const MAX_SCAN_STRINGS = 120;
+
+  function extractStrings(value: unknown, budget = MAX_SCAN_STRINGS): string[] {
+    if (budget <= 0) return [];
+    if (typeof value === 'string') return [value.slice(0, MAX_SCAN_LEN)];
+    if (Array.isArray(value)) {
+      const out: string[] = [];
+      for (const item of value) {
+        if (out.length >= budget) break;
+        out.push(...extractStrings(item, budget - out.length));
+      }
+      return out;
+    }
+    if (value !== null && typeof value === 'object') {
+      const out: string[] = [];
+      for (const v of Object.values(value as Record<string, unknown>)) {
+        if (out.length >= budget) break;
+        out.push(...extractStrings(v, budget - out.length));
+      }
+      return out;
+    }
+    return [];
+  }
+
+  /** Tools that perform batch/irreversible writes and need confirm:true. */
+  const CONFIRM_REQUIRED = new Set([
+    'bulk_ingest',           // up to 50 items at once
+    'ingest_notion_database',// up to 200 pages
+    'backfill_embeddings',   // updates all items in corpus
+    'recompute_salience',    // RPC over entire corpus
+    'compute_centrality',    // RPC over entire corpus
+    'generate_api_key',      // creates permanent credential shown only once
+  ]);
+
+  /** All tools that write to the DB — used for the tool-list summary at the bottom. */
+  // (exported indirectly via the server; also used to set destructiveHint correctly)
+  const WRITE_TOOLS = new Set([
+    'tag_item', 'toggle_bookmark', 'ingest_notion_page', 'add_note',
+    'ingest_content', 'bulk_ingest', 'ingest_notion_database',
+    'set_notion_api_key', 'backfill_embeddings', 'generate_api_key',
+    'compile_knowledge', 'recompute_salience', 'compute_centrality',
+  ]);
+  void WRITE_TOOLS; // referenced for documentation; may be used by callers via exports later
+
+  /** Human-readable preview for each write-confirm tool. */
+  function buildWritePreview(name: string, input: Record<string, unknown>): string {
+    switch (name) {
+      case 'bulk_ingest': {
+        const items = (input.items as Array<{ title: string }> | undefined) ?? [];
+        const sample = items.slice(0, 5).map(i => `"${i.title}"`).join(', ');
+        return `Ingest **${items.length}** item${items.length !== 1 ? 's' : ''}: ${sample}${items.length > 5 ? ` … +${items.length - 5} more` : ''}`;
+      }
+      case 'ingest_notion_database': {
+        const limit = (input.limit as number | undefined) ?? 50;
+        return `Ingest up to **${limit}** pages from Notion database \`${input.database_id}\``;
+      }
+      case 'backfill_embeddings':
+        return 'Generate vector embeddings for **all items** in your corpus that are missing them (may update hundreds of rows)';
+      case 'recompute_salience':
+        return 'Recompute salience scores across **your entire corpus** via `compute_salience_scores` RPC';
+      case 'compute_centrality':
+        return 'Recompute graph centrality scores across **your entire corpus** via `compute_centrality_scores` RPC';
+      case 'generate_api_key': {
+        const label = (input.label as string | undefined) ?? '(no label)';
+        return `Create a **permanent API key** — label: "${label}". The raw key is shown **once only** and cannot be recovered.`;
+      }
+      default:
+        return `Execute write operation: \`${name}\``;
+    }
+  }
+
+  /**
+   * Security wrapper applied to EVERY tool handler:
+   *   1. Injection scan on all string inputs
+   *   2. Require confirm:true for destructive batch writes
+   *   3. Fire-and-forget audit log
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function secureWrap(toolName: string, handler: (input: any) => unknown) {
+    return async (input: Record<string, unknown>): Promise<unknown> => {
+
+      // ── 1. Injection detection ──────────────────────────────────────────────
+      for (const s of extractStrings(input)) {
+        if (detectInjection(s)) {
+          logInjectionAttempt(auth.userId, toolName, s);
+          auditLog(auth.userId, toolName, input, false);
+          return {
+            content: [{
+              type: 'text' as const,
+              text: '[SECURITY] Tool call rejected: suspicious content detected in input parameters. This incident has been logged.',
+            }],
+          };
+        }
+      }
+
+      // ── 2. Write confirmation for destructive tools ─────────────────────────
+      if (CONFIRM_REQUIRED.has(toolName) && !input.confirm) {
+        const preview = buildWritePreview(toolName, input);
+        return {
+          content: [{
+            type: 'text' as const,
+            text: [
+              `⚠️ **Confirmation required** — \`${toolName}\` is a destructive write operation.`,
+              '',
+              '**What will happen:**',
+              preview,
+              '',
+              `To proceed: call \`${toolName}\` again with **\`confirm: true\`**.`,
+              'To cancel: do nothing.',
+            ].join('\n'),
+          }],
+        };
+      }
+
+      // ── 3. Execute + fire-and-forget audit log ──────────────────────────────
+      let success = true;
+      try {
+        return await handler(input);
+      } catch (err) {
+        success = false;
+        throw err;
+      } finally {
+        auditLog(auth.userId, toolName, input, success);
+      }
+    };
+  }
+
+  /**
+   * Proxy server.registerTool so every tool automatically gets secureWrap,
+   * and the 6 destructive tools automatically get confirm:boolean added to
+   * their Zod schema (so Zod doesn't strip the field before the handler sees it).
+   */
+  const _origRegister = server.registerTool.bind(server);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (server as any).registerTool = (name: string, def: any, handler: (input: any) => unknown) => {
+    // Extend schema for confirm-required tools so Zod doesn't strip confirm:true
+    let securedDef = def;
+    if (CONFIRM_REQUIRED.has(name) && def?.inputSchema?.extend) {
+      securedDef = {
+        ...def,
+        inputSchema: def.inputSchema.extend({
+          confirm: z.boolean().optional().describe(
+            'Pass true to confirm and execute this destructive write. Omit to get a preview first.'
+          ),
+        }),
+      };
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return _origRegister(name as any, securedDef as any, secureWrap(name, handler) as any);
+  };
 
   // ── Core read tools (1-4) ─────────────────────────────────────────────────────
 
@@ -395,6 +580,188 @@ export function createMcpServer(auth: AuthContext) {
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => listBrains(input, auth.userId)
+  );
+
+  // ── Phase 7 tools (26-30) ────────────────────────────────────────────────────
+
+  server.registerTool(
+    'get_knowledge_graph',
+    {
+      description: 'Build a knowledge graph around a specific item, showing how it connects to other items in your corpus via knowledge_edges. Returns the center item, connected nodes with metadata, and typed edges with confidence scores. Use depth=1 for direct connections, depth=2-3 for wider neighbourhood exploration.',
+      inputSchema: knowledgeGraphSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => getKnowledgeGraph(input, auth.userId)
+  );
+
+  server.registerTool(
+    'knowledge_health',
+    {
+      description: 'Run a health check on your knowledge corpus. Returns total items, missing embeddings, missing enrichment, missing tags, orphan items, stale items (90d+), contradictions, overdue reviews, topic gaps, and an overall health score out of 100.',
+      inputSchema: knowledgeHealthSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => knowledgeHealth(input, auth.userId)
+  );
+
+  server.registerTool(
+    'get_knowledge_index',
+    {
+      description: 'Get a topic-level index of your entire knowledge corpus. Groups items by primary topic and returns item count, synthesis count, average salience, latest save date, and source types per topic — sorted by item count descending. Use to understand which subjects dominate your library.',
+      inputSchema: knowledgeIndexSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => getKnowledgeIndex(input, auth.userId)
+  );
+
+  server.registerTool(
+    'export_corpus',
+    {
+      description: 'Export your entire BrainTube knowledge corpus as a ZIP file. Items are exported as Markdown with YAML frontmatter, concept articles go into a wiki/ folder, and an index.md is included. Returns a signed download URL valid for 1 hour.',
+      inputSchema: exportCorpusSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => exportCorpus(input, auth.rawToken)
+  );
+
+  server.registerTool(
+    'compile_knowledge',
+    {
+      description: 'Invoke the compile-knowledge edge function to generate concept articles from a topic cluster or Brain. Synthesises saved items into structured wiki-style articles with backlinks and knowledge graph edges. Pass either cluster_id or brain_id.',
+      inputSchema: compileKnowledgeSchema,
+      annotations: { readOnlyHint: false, idempotentHint: true }
+    },
+    async (input) => {
+      await requireCredits(auth.userId, 'ai_chat', 'compile_knowledge');
+      return compileKnowledge(input, auth.rawToken);
+    }
+  );
+
+  server.registerTool(
+    'get_concept_articles',
+    {
+      description: 'Query compiled concept articles from your knowledge base. Filter by cluster_id, brain_id, or free-text search against title and body. Returns title, slug, word count, and backlink count per article.',
+      inputSchema: getConceptArticlesSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => getConceptArticles(input, auth.userId)
+  );
+
+  // ── Phase 8 tools (32-35) ────────────────────────────────────────────────────
+
+  server.registerTool(
+    'tag_cooccurrence',
+    {
+      description: 'Find tags that frequently appear together across your corpus. Returns pairs sorted by co-occurrence count — useful for discovering implicit topic clusters and knowledge relationships.',
+      inputSchema: tagCooccurrenceSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => tagCooccurrence(input, auth.userId)
+  );
+
+  server.registerTool(
+    'entity_cooccurrence',
+    {
+      description: 'Find named entities (people, orgs, tools) that frequently co-appear across your corpus. Returns pairs sorted by co-occurrence count — useful for mapping who/what clusters in your knowledge base.',
+      inputSchema: entityCooccurrenceSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => entityCooccurrence(input, auth.userId)
+  );
+
+  server.registerTool(
+    'detect_gaps',
+    {
+      description: 'Detect knowledge gaps in your corpus: thin topics (few items), entities without depth, stale high-value items, topics missing concept articles, and unconnected items with no knowledge edges.',
+      inputSchema: detectGapsSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => detectGaps(input, auth.userId)
+  );
+
+  server.registerTool(
+    'most_retrieved',
+    {
+      description: 'Return the items you retrieve most often, ranked by retrieval_count. Surfaces your highest-utility knowledge — the items you keep coming back to.',
+      inputSchema: mostRetrievedSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => mostRetrieved(input, auth.userId)
+  );
+
+  // ── Phase 9 tools (36-42) ────────────────────────────────────────────────────
+
+  server.registerTool(
+    'export_claude_md',
+    {
+      description: 'Generate a CLAUDE.md-compatible knowledge context file for any Claude Code project. Pulls your top-salience items, compiled concept articles, key topics, and top entities into a structured Markdown block you can drop into any repo.',
+      inputSchema: exportClaudeMdSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => exportClaudeMd(input, auth.userId)
+  );
+
+  server.registerTool(
+    'recompute_salience',
+    {
+      description: 'Trigger a salience score recompute across your corpus via the compute_salience_scores RPC. Use this after bulk ingests or to refresh rankings. Returns { updated_count }.',
+      inputSchema: recomputeSalienceSchema,
+      annotations: { readOnlyHint: false, idempotentHint: true }
+    },
+    (input) => recomputeSalience(input, auth.userId)
+  );
+
+  server.registerTool(
+    'deep_search',
+    {
+      description: 'Multi-hop knowledge search: runs adaptive_search then traverses the knowledge graph from the top-3 results up to max_hops deep, surfacing semantically connected items that a flat search would miss. Returns direct_results + graph_connected + total_nodes_explored.',
+      inputSchema: deepSearchSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    async (input) => {
+      await requireCredits(auth.userId, 'ai_search', 'deep_search');
+      return deepSearch(input, auth.userId);
+    }
+  );
+
+  server.registerTool(
+    'retrieval_quality',
+    {
+      description: 'Get a retrieval quality dashboard for your corpus over the past N days. Covers search hit rates, zero-result queries, top search terms, and result relevance signals.',
+      inputSchema: retrievalQualitySchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => retrievalQuality(input, auth.userId)
+  );
+
+  server.registerTool(
+    'find_path',
+    {
+      description: 'Find the shortest path between two items in your knowledge graph. Traverses knowledge_edges up to max_depth hops and returns the ordered list of item IDs and edge types along the path, or "no path found" if disconnected.',
+      inputSchema: findPathSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => findPath(input)
+  );
+
+  server.registerTool(
+    'compute_centrality',
+    {
+      description: 'Trigger an on-demand recompute of graph centrality scores across your corpus via compute_centrality_scores RPC. Run after adding new knowledge edges or after compile_knowledge. Returns { updated_count }.',
+      inputSchema: computeCentralitySchema,
+      annotations: { readOnlyHint: false, idempotentHint: true }
+    },
+    (input) => computeCentrality(input, auth.userId)
+  );
+
+  server.registerTool(
+    'get_edge_history',
+    {
+      description: 'Get the temporal history of knowledge edges between two specific items — when they were connected, edge types over time, confidence changes. Pass item_a and item_b as UUIDs.',
+      inputSchema: edgeHistorySchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => getEdgeHistory(input)
   );
 
   // ── MCP Prompt: session_start ─────────────────────────────────────────────────

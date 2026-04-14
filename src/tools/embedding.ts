@@ -7,6 +7,8 @@ interface EmbedFields {
   title?: string | null;
   summary?: string | null;
   summary_oneliner?: string | null;
+  description?: string | null;
+  full_transcript?: string | null;
   tags?: string[] | null;
   channel_name?: string | null; // maps to items.channel
   // Enrichment metadata — present on items that have been through enrich-metadata
@@ -21,29 +23,35 @@ interface EmbedFields {
 /**
  * Build the string that gets embedded for an item.
  *
- * If enrichment metadata is present (topic_primary set), uses prefix-fusion
- * format to match the re-embed-batch edge function (embedding_version = 2).
- * Otherwise falls back to the legacy format (embedding_version = 1).
+ * Version 3 (Anthropic Contextual Retrieval pattern, ~49% retrieval improvement):
+ *   Contextual prefix sentence + raw content body (full_transcript preferred).
+ *   Applied whenever topic_primary is set (i.e. enriched items).
+ *
+ * Version 1 (legacy): title + channel + tags + summary, no enrichment data.
  */
-export function buildEmbedText(fields: EmbedFields): { text: string; version: 1 | 2 } {
+export function buildEmbedText(fields: EmbedFields): { text: string; version: 1 | 3 } {
   if (fields.topic_primary) {
-    // Prefix-fusion path — embedding_version 2
-    const prefixParts: string[] = [];
-    prefixParts.push(`Topic: ${fields.topic_primary}`);
-    if (fields.topic_secondary?.length) prefixParts.push(`Subtopics: ${fields.topic_secondary.join(', ')}`);
-    if (fields.entities?.length)        prefixParts.push(`Entities: ${fields.entities.join(', ')}`);
-    if (fields.key_concepts?.length)    prefixParts.push(`Concepts: ${fields.key_concepts.join(', ')}`);
-    if (fields.content_type)            prefixParts.push(`Type: ${fields.content_type}`);
-    if (fields.domain)                  prefixParts.push(`Domain: ${fields.domain}`);
+    // Contextual Retrieval path — embedding_version 3
+    // Prefix gives the model document-level context before the raw content.
+    const contextPrefix = [
+      `From "${fields.title || 'Untitled'}"`,
+      fields.topic_primary ? ` about ${fields.topic_primary}` : '',
+      fields.summary_oneliner ? `. ${fields.summary_oneliner}` : '',
+      '. Content: ',
+    ].join('');
 
-    const parts: string[] = [`[${prefixParts.join(' | ')}]`];
-    if (fields.title)            parts.push(fields.title.trim());
-    if (fields.summary_oneliner) parts.push(fields.summary_oneliner.trim());
-    if (fields.summary)          parts.push(fields.summary.trim());
-    return { text: parts.join('\n'), version: 2 };
+    const body = (
+      fields.full_transcript ||
+      fields.summary ||
+      fields.description ||
+      fields.title ||
+      ''
+    ).slice(0, 6000);
+
+    return { text: contextPrefix + body, version: 3 };
   }
 
-  // Legacy path — embedding_version 1
+  // Legacy path — embedding_version 1 (items not yet enriched)
   const parts: string[] = [];
   if (fields.title)        parts.push(fields.title.trim());
   if (fields.channel_name) parts.push(`Channel: ${fields.channel_name.trim()}`);
@@ -62,7 +70,7 @@ export async function embedItem(itemId: string): Promise<void> {
   // Fetch core fields + enrichment metadata
   const { data: item, error } = await dbAdmin
     .from('items')
-    .select('id, title, summary, summary_oneliner, channel, topic_primary, topic_secondary, entities, key_concepts, content_type, domain')
+    .select('id, title, summary, summary_oneliner, description, full_transcript, channel, topic_primary, topic_secondary, entities, key_concepts, content_type, domain')
     .eq('id', itemId)
     .single();
 
@@ -82,6 +90,8 @@ export async function embedItem(itemId: string): Promise<void> {
     title: item.title,
     summary: item.summary,
     summary_oneliner: item.summary_oneliner,
+    description: item.description,
+    full_transcript: item.full_transcript,
     tags,
     channel_name: item.channel,
     topic_primary: item.topic_primary,
@@ -100,7 +110,7 @@ export async function embedItem(itemId: string): Promise<void> {
     .from('items')
     .update({
       embedding,
-      embedding_version: version,
+      embedding_version: version as number,
       last_embedded_at: new Date().toISOString()
     })
     .eq('id', itemId);
