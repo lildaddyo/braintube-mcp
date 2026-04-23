@@ -51,6 +51,7 @@ import {
   firewallRollbackRulesSchema, firewallRollbackRules,
   firewallRuleHistorySchema, firewallRuleHistory,
 } from './tools/firewall-admin.js';
+import { connectReadwiseSchema, connectReadwise, syncReadwiseSchema, syncReadwise } from './tools/readwise.js';
 import { requireCredits } from './lib/credits.js';
 import { dbAdmin } from './db/supabase.js';
 import { detectInjection, logInjectionAttempt } from './security/injection.js';
@@ -76,7 +77,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
 
   const server = new McpServer({
     name: 'braintube-mcp',
-    version: '3.9.0',
+    version: '3.10.0',
   });
 
   // ══════════════════════════════════════════════════════════════════════════════
@@ -454,6 +455,30 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     (input) => toggleBookmark(input, auth.userId)
   );
 
+  // ── Readwise integration tools (11-12) ───────────────────────────────────────
+
+  server.registerTool(
+    'connect_readwise',
+    {
+      description: 'Connect your Readwise account to BrainTube by saving your Readwise API token. Required before sync_readwise can run. Get your token at readwise.io/access_token.',
+      inputSchema: connectReadwiseSchema,
+      annotations: { readOnlyHint: false, idempotentHint: true }
+    },
+    (input) => connectReadwise(input, auth.rawToken ?? '')
+  );
+
+  server.registerTool(
+    'sync_readwise',
+    {
+      description: 'Import highlights from your Readwise library into your BrainTube corpus. Use mode=incremental (default) to fetch only new highlights, or mode=full to re-import everything. Requires connect_readwise first.',
+      inputSchema: syncReadwiseSchema,
+      annotations: { readOnlyHint: false, idempotentHint: false }
+    },
+    (input) => syncReadwise(input, auth.rawToken ?? '')
+  );
+
+  // ── Notion + write tools (13-14) ─────────────────────────────────────────────
+
   server.registerTool(
     'ingest_notion_page',
     {
@@ -476,8 +501,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     }
   );
 
-  // ── Write tools (10) ─────────────────────────────────────────────────────────
-
   server.registerTool(
     'add_note',
     {
@@ -488,7 +511,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     (input) => addNote(input, auth.userId)
   );
 
-  // ── Session brief tools (11-13) ───────────────────────────────────────────────
+  // ── Session brief tools (15-17) ───────────────────────────────────────────────
 
   server.registerTool(
     'get_recent_conversations',
