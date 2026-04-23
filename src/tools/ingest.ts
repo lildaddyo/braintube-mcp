@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { dbAdmin } from '../db/supabase.js';
 import { findItemBySourceUrl, findItemByTitle, linkTags } from '../db/supabase.js';
 import { embedItem } from './embedding.js';
+import { sourceTypeEnum } from '../schemas/source-types.js';
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
@@ -15,11 +16,7 @@ export const ingestContentSchema = z.object({
   source_url: z.string().url().optional().describe(
     'Source URL — used as the primary dedup key. Strongly recommended.'
   ),
-  source_type: z.enum([
-    'note', 'manual', 'article', 'web', 'document', 'pdf', 'ebook',
-    'research_paper', 'work', 'reddit', 'medium', 'substack', 'github',
-    'notion', 'chatgpt', 'claude', 'gemini', 'wikipedia', 'bookmark'
-  ]).default('manual').describe(
+  source_type: sourceTypeEnum.default('manual').describe(
     'Content type (default: manual)'
   ),
   tags: z.array(z.string().min(1).max(100)).max(20).optional().describe(

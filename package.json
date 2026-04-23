@@ -1,6 +1,6 @@
 {
   "name": "braintube-mcp",
-  "version": "1.0.0",
+  "version": "3.10.0",
   "type": "module",
   "scripts": {
     "build": "tsc",

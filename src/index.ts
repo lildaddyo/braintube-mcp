@@ -83,7 +83,7 @@ app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     service: 'braintube-mcp',
-    version: '3.9.2',
+    version: '3.10.0',
     timestamp: new Date().toISOString()
   });
 });
