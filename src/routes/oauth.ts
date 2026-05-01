@@ -18,11 +18,13 @@
 
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import { randomBytes, createHash } from 'crypto';
 import {
   registerClient,
   getClient,
   storePendingAuth,
   consumePendingAuth,
+  peekPendingAuth,
   restorePendingAuth,
   issueAuthCode,
   consumeAuthCode,
@@ -37,6 +39,36 @@ const anonKey = process.env.SUPABASE_ANON_KEY!;
 function baseUrl(req: Request): string {
   const domain = process.env.RAILWAY_PUBLIC_DOMAIN;
   return domain ? `https://${domain}` : `${req.protocol}://${req.get('host')}`;
+}
+
+// ─── Google OAuth round-trip state (in-memory, short-lived) ──────────────────
+// Maps an opaque cookie value (gstate) to the in-flight Claude OAuth state plus
+// the Supabase PKCE verifier we generated for the provider exchange.
+
+interface GoogleAuthState {
+  claudeState: string;
+  supabaseVerifier: string;
+  createdAt: number;
+}
+
+const googleAuthStates = new Map<string, GoogleAuthState>();
+const GOOGLE_STATE_TTL_MS = 10 * 60 * 1000;
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of googleAuthStates.entries()) {
+    if (now - v.createdAt > GOOGLE_STATE_TTL_MS) googleAuthStates.delete(k);
+  }
+}, 60_000).unref();
+
+function readCookie(req: Request, name: string): string | null {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const t = part.trim();
+    if (t.startsWith(`${name}=`)) return decodeURIComponent(t.slice(name.length + 1));
+  }
+  return null;
 }
 
 // ─── OAuth Authorization Server Metadata (RFC 8414) ──────────────────────────
@@ -199,6 +231,148 @@ oauthRouter.post('/oauth/authorize', async (req: Request, res: Response) => {
   res.redirect(redirectUrl.toString());
 });
 
+// ─── Google sign-in — start ──────────────────────────────────────────────────
+// Reached by clicking "Continue with Google" in the login form. We confirm the
+// Claude OAuth flow is still pending (peek, don't consume), generate a Supabase
+// PKCE verifier, drop a short-lived cookie tying the browser to that verifier,
+// and redirect the user to Supabase's Google authorize endpoint.
+
+oauthRouter.get('/oauth/google/start', (req: Request, res: Response) => {
+  const claudeState = String(req.query.state ?? '');
+  if (!claudeState) {
+    res.status(400).send(errorPage('Missing state.'));
+    return;
+  }
+
+  const pending = peekPendingAuth(claudeState);
+  if (!pending) {
+    res.status(400).send(errorPage('Authorization session expired. Please retry from Claude.'));
+    return;
+  }
+
+  const supabaseVerifier = randomBytes(32).toString('base64url');
+  const supabaseChallenge = createHash('sha256').update(supabaseVerifier).digest('base64url');
+  const gstate = randomBytes(16).toString('hex');
+
+  googleAuthStates.set(gstate, {
+    claudeState,
+    supabaseVerifier,
+    createdAt: Date.now(),
+  });
+
+  res.cookie('bt_oauth_gstate', gstate, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    maxAge: GOOGLE_STATE_TTL_MS,
+    path: '/oauth/google',
+  });
+
+  const url = new URL(`${supabaseUrl}/auth/v1/authorize`);
+  url.searchParams.set('provider', 'google');
+  url.searchParams.set('redirect_to', `${baseUrl(req)}/oauth/google/callback`);
+  url.searchParams.set('code_challenge', supabaseChallenge);
+  url.searchParams.set('code_challenge_method', 's256');
+  res.redirect(url.toString());
+});
+
+// ─── Google sign-in — callback ───────────────────────────────────────────────
+// Supabase redirects here after Google authentication. We trade the Supabase
+// auth_code (PKCE) for a Supabase session, then complete the original Claude
+// authorization-code redirect with our own short-lived MCP code.
+
+oauthRouter.get('/oauth/google/callback', async (req: Request, res: Response) => {
+  const code = String(req.query.code ?? '');
+  const errorParam = String(req.query.error_description ?? req.query.error ?? '');
+  if (errorParam) {
+    res.status(400).send(errorPage(`Google sign-in failed: ${errorParam}`));
+    return;
+  }
+  if (!code) {
+    res.status(400).send(errorPage('Missing code from provider.'));
+    return;
+  }
+
+  const gstate = readCookie(req, 'bt_oauth_gstate');
+  if (!gstate) {
+    res.status(400).send(errorPage('Missing session cookie. Try again from Claude.'));
+    return;
+  }
+
+  const entry = googleAuthStates.get(gstate);
+  googleAuthStates.delete(gstate);
+  res.clearCookie('bt_oauth_gstate', { path: '/oauth/google' });
+
+  if (!entry) {
+    res.status(400).send(errorPage('Sign-in session expired. Please retry from Claude.'));
+    return;
+  }
+  if (Date.now() - entry.createdAt > GOOGLE_STATE_TTL_MS) {
+    res.status(400).send(errorPage('Sign-in session expired. Please retry from Claude.'));
+    return;
+  }
+
+  // Exchange the Supabase auth_code for tokens using our PKCE verifier.
+  let tokenJson: {
+    access_token?: string;
+    refresh_token?: string;
+    user?: { id?: string; email?: string };
+  };
+  try {
+    const tokenResp = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=pkce`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: anonKey,
+      },
+      body: JSON.stringify({
+        auth_code: code,
+        code_verifier: entry.supabaseVerifier,
+      }),
+    });
+
+    if (!tokenResp.ok) {
+      console.error('[oauth/google/callback] Supabase token exchange failed — status', tokenResp.status);
+      res.status(400).send(errorPage('Could not complete Google sign-in.'));
+      return;
+    }
+
+    tokenJson = await tokenResp.json();
+  } catch (err) {
+    console.error('[oauth/google/callback] token exchange error:', err);
+    res.status(500).send(errorPage('A server error occurred during Google sign-in.'));
+    return;
+  }
+
+  if (!tokenJson.access_token || !tokenJson.refresh_token || !tokenJson.user?.id) {
+    res.status(400).send(errorPage('Invalid token response from Supabase.'));
+    return;
+  }
+
+  // Now consume the pending Claude OAuth state and complete the redirect to Claude.
+  const pending = consumePendingAuth(entry.claudeState);
+  if (!pending) {
+    res.status(400).send(errorPage('Authorization session expired.'));
+    return;
+  }
+
+  const mcpCode = issueAuthCode({
+    accessToken: tokenJson.access_token,
+    refreshToken: tokenJson.refresh_token,
+    userId: tokenJson.user.id,
+    email: tokenJson.user.email,
+    codeChallenge: pending.codeChallenge,
+    codeChallengeMethod: pending.codeChallengeMethod,
+  });
+
+  console.log(`[oauth/google/callback] auth code issued — email: ${tokenJson.user.email ?? '(no email)'}`);
+
+  const claudeRedirect = new URL(pending.redirectUri);
+  claudeRedirect.searchParams.set('code', mcpCode);
+  claudeRedirect.searchParams.set('state', pending.state);
+  res.redirect(claudeRedirect.toString());
+});
+
 // ─── Token endpoint ───────────────────────────────────────────────────────────
 
 oauthRouter.post('/oauth/token', async (req: Request, res: Response) => {
@@ -295,105 +469,72 @@ function esc(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function loginForm(state: string, errorMsg?: string): string {
-  const errorHtml = errorMsg
-    ? `<div class="error">${esc(errorMsg)}</div>`
-    : '';
+// ─── Shared brand styles for OAuth pages ─────────────────────────────────────
+// Fraunces (display) + Space Grotesk (body) — matches brain-tube.com landing.
 
+const BRAND_HEAD = `<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Space+Grotesk:wght@400;500;600&display=swap">`;
+
+const BRAND_BASE_CSS = `*,*::before,*::after { box-sizing: border-box; }
+  html,body { margin:0; padding:0; background:#0a0a0a; color:#e8e8e8; font-family:'Space Grotesk',system-ui,-apple-system,sans-serif; min-height:100vh; }
+  body { display:flex; align-items:center; justify-content:center; padding:24px; }
+  .card { width:100%; max-width:420px; background:#141414; border:1px solid rgba(255,255,255,.06); border-radius:16px; padding:36px 32px; }
+  .wordmark { font-family:'Fraunces',Georgia,serif; font-weight:700; font-size:32px; letter-spacing:-.02em; margin:0 0 12px; line-height:1; }
+  .wordmark .brain { color:#fff; }
+  .wordmark .tube { color:#FF6B1A; }
+  .subtitle { margin:0 0 28px; font-size:14px; color:#9a9a9a; line-height:1.5; }
+  .footer { margin:24px 0 0; text-align:center; font-size:12px; color:#6a6a6a; line-height:1.5; }
+  .error { background:rgba(255,87,87,.08); border:1px solid rgba(255,87,87,.2); color:#ff8a8a; padding:10px 12px; border-radius:8px; font-size:13px; margin-bottom:16px; }`;
+
+function loginForm(state: string, errorMsg?: string): string {
+  const errorHtml = errorMsg ? `<div class="error">${esc(errorMsg)}</div>` : '';
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Connect BrainTube to Claude</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0c0c0c;
-      color: #e8e8e8;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      padding: 16px;
-    }
-    .card {
-      background: #161616;
-      border: 1px solid #252525;
-      border-radius: 14px;
-      padding: 44px 40px;
-      width: 100%;
-      max-width: 400px;
-      box-shadow: 0 24px 64px rgba(0,0,0,.5);
-    }
-    .brand { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; margin-bottom: 6px; }
-    .brand span { color: #f97316; }
-    .subtitle { color: #777; font-size: 13.5px; line-height: 1.5; margin-bottom: 32px; }
-    label { display: block; font-size: 12.5px; font-weight: 500; color: #999; margin-bottom: 6px; }
-    input[type="email"], input[type="password"] {
-      width: 100%;
-      padding: 10px 13px;
-      background: #0f0f0f;
-      border: 1px solid #2e2e2e;
-      border-radius: 8px;
-      color: #fff;
-      font-size: 14px;
-      margin-bottom: 18px;
-      outline: none;
-      transition: border-color 0.15s;
-    }
-    input:focus { border-color: #f97316; }
-    .btn {
-      width: 100%;
-      padding: 11px;
-      background: #f97316;
-      color: #fff;
-      font-size: 14.5px;
-      font-weight: 600;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-    .btn:hover { background: #ea6c0a; }
-    .btn:active { background: #d9600a; }
-    .error {
-      color: #fca5a5;
-      font-size: 13px;
-      background: #1f1010;
-      border: 1px solid #3f1010;
-      border-radius: 7px;
-      padding: 10px 13px;
-      margin-bottom: 18px;
-    }
-    .footer {
-      margin-top: 22px;
-      font-size: 11.5px;
-      color: #444;
-      text-align: center;
-      line-height: 1.6;
-    }
-  </style>
+${BRAND_HEAD}
+<title>Connect BrainTube to Claude</title>
+<style>
+  ${BRAND_BASE_CSS}
+  .google-btn { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; padding:12px 16px; background:#fff; color:#1f1f1f; border:0; border-radius:10px; font-family:inherit; font-size:14px; font-weight:500; cursor:pointer; text-decoration:none; transition:background 120ms ease; }
+  .google-btn:hover { background:#f4f4f4; }
+  .google-btn svg { width:18px; height:18px; flex-shrink:0; }
+  .divider { display:flex; align-items:center; gap:12px; margin:20px 0; font-size:12px; color:#5a5a5a; text-transform:uppercase; letter-spacing:.08em; }
+  .divider::before,.divider::after { content:''; flex:1; height:1px; background:rgba(255,255,255,.08); }
+  label { display:block; font-size:13px; font-weight:500; color:#c8c8c8; margin:0 0 6px; }
+  input[type=email],input[type=password] { width:100%; padding:11px 14px; background:#1c1c1c; border:1px solid rgba(255,255,255,.08); border-radius:10px; color:#fff; font-family:inherit; font-size:14px; margin-bottom:16px; outline:none; transition:border-color 120ms ease; }
+  input[type=email]:focus,input[type=password]:focus { border-color:#866CEF; }
+  .submit-btn { width:100%; padding:12px 16px; background:#866CEF; color:#fff; border:0; border-radius:10px; font-family:inherit; font-size:14px; font-weight:600; cursor:pointer; transition:background 120ms ease; margin-top:4px; }
+  .submit-btn:hover { background:#9a82f2; }
+</style>
 </head>
 <body>
-  <div class="card">
-    <div class="brand">Brain<span>Tube</span></div>
-    <p class="subtitle">Sign in to connect your knowledge base to Claude. Your credentials go directly to BrainTube.</p>
-    ${errorHtml}
-    <form method="POST" action="/oauth/authorize">
-      <input type="hidden" name="state" value="${esc(state)}">
-      <label for="email">Email</label>
-      <input type="email" id="email" name="email" placeholder="you@example.com" required autofocus autocomplete="email">
-      <label for="password">Password</label>
-      <input type="password" id="password" name="password" placeholder="••••••••" required autocomplete="current-password">
-      <button class="btn" type="submit">Connect to Claude</button>
-    </form>
-    <p class="footer">
-      BrainTube will have access to your saved knowledge base.<br>
-      You can disconnect at any time from Claude.ai settings.
-    </p>
-  </div>
+<div class="card">
+  <h1 class="wordmark"><span class="brain">Brain</span><span class="tube">Tube</span></h1>
+  <p class="subtitle">Sign in to connect BrainTube to Claude.<br>Your credentials go directly to BrainTube — never through Claude.</p>
+  ${errorHtml}
+  <a href="/oauth/google/start?state=${esc(state)}" class="google-btn">
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+    </svg>
+    Continue with Google
+  </a>
+  <div class="divider">or</div>
+  <form method="post" action="/oauth/authorize">
+    <input type="hidden" name="state" value="${esc(state)}" />
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" placeholder="you@example.com" required autocomplete="email" />
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" placeholder="••••••••" required autocomplete="current-password" />
+    <button type="submit" class="submit-btn">Connect to Claude</button>
+  </form>
+  <p class="footer">Claude will be able to query your BrainTube knowledge base. You can disconnect any time from Claude.ai settings.</p>
+</div>
 </body>
 </html>`;
 }
@@ -402,20 +543,22 @@ function errorPage(message: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>BrainTube — Auth Error</title>
-  <style>
-    body { font-family: system-ui, sans-serif; background: #0c0c0c; color: #e8e8e8; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-    .card { background: #161616; border: 1px solid #252525; border-radius: 14px; padding: 40px; max-width: 420px; text-align: center; }
-    h1 { font-size: 18px; margin-bottom: 12px; }
-    p { color: #888; font-size: 14px; line-height: 1.6; }
-  </style>
+${BRAND_HEAD}
+<title>BrainTube — Auth Error</title>
+<style>
+  ${BRAND_BASE_CSS}
+  .card { text-align:left; }
+  .heading { font-family:'Fraunces',Georgia,serif; font-weight:500; font-size:20px; color:#fff; margin:0 0 12px; line-height:1.3; }
+  .message { color:#bdbdbd; font-size:14px; line-height:1.55; margin:0; }
+</style>
 </head>
 <body>
-  <div class="card">
-    <h1>Authentication Error</h1>
-    <p>${esc(message)}</p>
-  </div>
+<div class="card">
+  <h1 class="wordmark"><span class="brain">Brain</span><span class="tube">Tube</span></h1>
+  <p class="heading">Authentication error</p>
+  <p class="message">${esc(message)}</p>
+  <p class="footer">Return to Claude.ai and click Connect to try again.</p>
+</div>
 </body>
 </html>`;
 }

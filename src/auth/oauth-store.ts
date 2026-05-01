@@ -62,6 +62,17 @@ export function consumePendingAuth(state: string): PendingAuth | undefined {
   return val;
 }
 
+// Read a pending auth without consuming it. Used by side-channel flows
+// (e.g. Google sign-in start) that need to confirm the Claude OAuth flow
+// is still alive but must leave the entry in place for the eventual
+// callback to consume.
+export function peekPendingAuth(state: string): PendingAuth | undefined {
+  const val = pendingAuths.get(state);
+  if (!val) return undefined;
+  if (Date.now() - val.createdAt > 10 * 60 * 1000) return undefined;
+  return val;
+}
+
 // Re-store a pending auth (e.g. after a failed login attempt so the user can retry)
 export function restorePendingAuth(data: PendingAuth): void {
   pendingAuths.set(data.state, data);
