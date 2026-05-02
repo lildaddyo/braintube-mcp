@@ -1,6 +1,9 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { randomUUID } from 'crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createMcpServer } from './server.js';
 import { getAuthContext } from './auth/jwt.js';
@@ -12,6 +15,15 @@ import { ingestContent } from './tools/ingest.js';
 import { summariseConversation } from './tools/summarise.js';
 import { backfillEmbeddings } from './tools/embedding.js';
 import type { AuthContext } from './types.js';
+
+// Resolve package.json relative to this file so /health reports the actual
+// shipped version. Built file lives at dist/index.js, source at src/index.ts —
+// '..' lands on the repo root in both cases.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const pkg = JSON.parse(
+  readFileSync(join(__dirname, '..', 'package.json'), 'utf8'),
+) as { version: string };
 
 const app = express();
 app.use(express.json());
@@ -83,7 +95,7 @@ app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     service: 'braintube-mcp',
-    version: '3.10.0',
+    version: pkg.version,
     timestamp: new Date().toISOString()
   });
 });
