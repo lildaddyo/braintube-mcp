@@ -236,6 +236,16 @@ oauthRouter.post('/oauth/authorize', async (req: Request, res: Response) => {
 
   console.log(`[oauth] auth code issued — email: ${userEmail}`);
 
+  // Defense-in-depth: re-validate immediately before redirect. Upstream gates
+  // exist (allowlist at /oauth/register, registered-URI check at /oauth/authorize),
+  // but SAST taint can't trace through consumePendingAuth and a future migration
+  // of clientStore to Supabase could break the chain silently.
+  if (!isRedirectUriAllowed(pending.redirectUri)) {
+    console.warn('[oauth] rejected redirect to non-allowlisted URI:', pending.redirectUri);
+    res.status(400).json({ error: 'invalid_redirect_uri' });
+    return;
+  }
+
   const redirectUrl = new URL(pending.redirectUri);
   redirectUrl.searchParams.set('code', code);
   redirectUrl.searchParams.set('state', pending.state);
@@ -377,6 +387,13 @@ oauthRouter.get('/oauth/google/callback', async (req: Request, res: Response) =>
   });
 
   console.log(`[oauth/google/callback] auth code issued — email: ${tokenJson.user.email ?? '(no email)'}`);
+
+  // Defense-in-depth: see /oauth/authorize POST for the rationale.
+  if (!isRedirectUriAllowed(pending.redirectUri)) {
+    console.warn('[oauth/google/callback] rejected redirect to non-allowlisted URI:', pending.redirectUri);
+    res.status(400).json({ error: 'invalid_redirect_uri' });
+    return;
+  }
 
   const claudeRedirect = new URL(pending.redirectUri);
   claudeRedirect.searchParams.set('code', mcpCode);
