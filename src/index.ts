@@ -1,4 +1,5 @@
 import express from 'express';
+import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { randomUUID } from 'crypto';
 import { readFileSync } from 'node:fs';
@@ -26,6 +27,7 @@ const pkg = JSON.parse(
 ) as { version: string };
 
 const app = express();
+app.use(helmet());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); // needed for OAuth login form POST
 

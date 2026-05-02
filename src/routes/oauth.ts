@@ -29,6 +29,7 @@ import {
   issueAuthCode,
   consumeAuthCode,
   verifyPkce,
+  isRedirectUriAllowed,
 } from '../auth/oauth-store.js';
 
 export const oauthRouter = Router();
@@ -105,6 +106,16 @@ oauthRouter.post('/oauth/register', (req: Request, res: Response) => {
       error_description: 'redirect_uris is required',
     });
     return;
+  }
+
+  for (const uri of body.redirect_uris) {
+    if (typeof uri !== 'string' || !isRedirectUriAllowed(uri)) {
+      res.status(400).json({
+        error: 'invalid_redirect_uri',
+        uri: typeof uri === 'string' ? uri : null,
+      });
+      return;
+    }
   }
 
   const client = registerClient(
