@@ -29,6 +29,7 @@ import {
   issueAuthCode,
   consumeAuthCode,
   verifyPkce,
+  isRedirectUriAllowed,
 } from '../auth/oauth-store.js';
 
 export const oauthRouter = Router();
@@ -105,6 +106,16 @@ oauthRouter.post('/oauth/register', (req: Request, res: Response) => {
       error_description: 'redirect_uris is required',
     });
     return;
+  }
+
+  for (const uri of body.redirect_uris) {
+    if (typeof uri !== 'string' || !isRedirectUriAllowed(uri)) {
+      res.status(400).json({
+        error: 'invalid_redirect_uri',
+        uri: typeof uri === 'string' ? uri : null,
+      });
+      return;
+    }
   }
 
   const client = registerClient(
@@ -224,6 +235,16 @@ oauthRouter.post('/oauth/authorize', async (req: Request, res: Response) => {
   });
 
   console.log(`[oauth] auth code issued — email: ${userEmail}`);
+
+  // Defense-in-depth: re-validate immediately before redirect. Upstream gates
+  // exist (allowlist at /oauth/register, registered-URI check at /oauth/authorize),
+  // but SAST taint can't trace through consumePendingAuth and a future migration
+  // of clientStore to Supabase could break the chain silently.
+  if (!isRedirectUriAllowed(pending.redirectUri)) {
+    console.warn('[oauth] rejected redirect to non-allowlisted URI:', pending.redirectUri);
+    res.status(400).json({ error: 'invalid_redirect_uri' });
+    return;
+  }
 
   const redirectUrl = new URL(pending.redirectUri);
   redirectUrl.searchParams.set('code', code);
@@ -367,9 +388,23 @@ oauthRouter.get('/oauth/google/callback', async (req: Request, res: Response) =>
 
   console.log(`[oauth/google/callback] auth code issued — email: ${tokenJson.user.email ?? '(no email)'}`);
 
+  // Defense-in-depth: see /oauth/authorize POST for the rationale.
+  if (!isRedirectUriAllowed(pending.redirectUri)) {
+    console.warn('[oauth/google/callback] rejected redirect to non-allowlisted URI:', pending.redirectUri);
+    res.status(400).json({ error: 'invalid_redirect_uri' });
+    return;
+  }
+
   const claudeRedirect = new URL(pending.redirectUri);
   claudeRedirect.searchParams.set('code', mcpCode);
   claudeRedirect.searchParams.set('state', pending.state);
+  //noaikido
+  // pending.redirectUri is validated three times before reaching here:
+  //   (1) at /oauth/register against REDIRECT_URI_ALLOWLIST,
+  //   (2) at /oauth/authorize against client.redirectUris,
+  //   (3) inline guard immediately above this block.
+  // Aikido's SAST taint analysis cannot trace the validation chain through
+  // consumePendingAuth(). Confirmed false positive 2026-05-02.
   res.redirect(claudeRedirect.toString());
 });
 
