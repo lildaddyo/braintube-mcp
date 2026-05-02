@@ -1,5 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createHash, randomBytes } from 'crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { searchSchema, searchKnowledge } from './tools/search.js';
 import { videoSchema, getVideo } from './tools/video.js';
@@ -67,6 +70,15 @@ import {
 import type { UserRole } from './security/tool-access.js';
 import type { AuthContext } from './types.js';
 
+// Resolve package.json relative to this file so the MCP initialize handshake
+// reports the actual shipped version. dist/server.js → '..' = repo root, same
+// for src/server.ts at dev time.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const pkg = JSON.parse(
+  readFileSync(join(__dirname, '..', 'package.json'), 'utf8'),
+) as { version: string };
+
 // Every tool call is scoped to the authenticated user
 export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   // ── Resolve user role ONCE per session ──────────────────────────────────────
@@ -77,7 +89,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
 
   const server = new McpServer({
     name: 'braintube-mcp',
-    version: '3.10.0',
+    version: pkg.version,
   });
 
   // ══════════════════════════════════════════════════════════════════════════════
