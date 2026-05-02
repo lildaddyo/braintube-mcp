@@ -1,5 +1,32 @@
 import { createHash, randomBytes } from 'crypto';
 
+// ─── redirect_uri allowlist ───────────────────────────────────────────────────
+// Patterns that any client may register. `*` matches a single path/host segment
+// (no slashes); `**` matches across slashes. Adjust deliberately — these gate
+// every redirect we emit, so a permissive entry is an open-redirect oracle.
+const REDIRECT_URI_ALLOWLIST = [
+  'https://claude.ai/**',
+  'https://*.claude.ai/**',
+  'https://*.anthropic.com/**',
+  'https://cursor.sh/**',
+  'https://*.cursor.sh/**',
+  'https://codeium.com/**',
+  'https://*.windsurf.dev/**',
+  'http://localhost:*/**',
+  'http://127.0.0.1:*/**',
+];
+
+function globToRegex(p: string): RegExp {
+  const esc = p.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp('^' + esc.replace(/\*\*/g, '\x00').replace(/\*/g, '[^/]*').replace(/\x00/g, '.*') + '$');
+}
+
+const allowlistRegexes = REDIRECT_URI_ALLOWLIST.map(globToRegex);
+
+export function isRedirectUriAllowed(uri: string): boolean {
+  return allowlistRegexes.some((re) => re.test(uri));
+}
+
 // ─── Registered OAuth clients (RFC 7591 dynamic client registration) ──────────
 // Stored in-memory — clients re-register each session, so loss on restart is fine.
 
