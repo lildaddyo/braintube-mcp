@@ -1,0 +1,7 @@
+name = "braintube-docs-proxy"
+main = "src/index.ts"
+compatibility_date = "2026-05-24"
+
+[[routes]]
+pattern = "docs.brain-tube.com/*"
+zone_name = "brain-tube.com"
