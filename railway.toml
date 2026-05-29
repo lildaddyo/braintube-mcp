@@ -10,3 +10,9 @@ restartPolicyMaxRetries = 3
 
 [[services]]
 name = "braintube-mcp"
+
+[[services]]
+name = "rnd-daily-cron"
+# cronSchedule DISABLED — enable on Spuck's explicit go after Phase C review
+# cronSchedule = "0 3 * * *"
+startCommand = "node dist/cron/rnd-daily.js"
