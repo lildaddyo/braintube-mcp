@@ -39,6 +39,23 @@ const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 // --- Sofia timezone window -> UTC bounds --------------------------------------
 
 function yesterdaySofiaUtcBounds(): { start: string; end: string; runDate: string } {
+  // Allow manual override for dry-run / backfill: RND_DATE_OVERRIDE=YYYY-MM-DD
+  if (process.env.RND_DATE_OVERRIDE) {
+    const runDate = process.env.RND_DATE_OVERRIDE;
+    const refMidnightUtc = new Date(`${runDate}T00:00:00Z`);
+    const sofiaMidnightStr = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/Sofia",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hour12: false,
+    }).format(refMidnightUtc);
+    const timePart = sofiaMidnightStr.split(", ")[1] ?? "03:00:00";
+    const [h, m] = timePart.split(":").map(Number);
+    const offsetMs = ((h * 60) + m) * 60 * 1000;
+    const startUtc = new Date(refMidnightUtc.getTime() - offsetMs);
+    const endUtc = new Date(startUtc.getTime() + 24 * 60 * 60 * 1000);
+    return { start: startUtc.toISOString(), end: endUtc.toISOString(), runDate };
+  }
   const now = new Date();
   const sofiaFormatter = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Sofia",
@@ -282,7 +299,7 @@ async function main() {
           est_cost: 0,
         },
         { onConflict: "item_id,run_date" },
-      ).catch(() => {});
+      );
     }
   }
 
@@ -300,3 +317,5 @@ main().catch(err => {
   console.error("[rnd-daily] fatal:", err);
   process.exit(1);
 });
+
+
