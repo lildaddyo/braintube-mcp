@@ -126,6 +126,7 @@ oauthRouter.post('/oauth/register', (req: Request, res: Response) => {
   res.status(201).json({
     client_id: client.clientId,
     client_secret: client.clientSecret,
+    client_secret_expires_at: 0,
     redirect_uris: client.redirectUris,
     client_name: client.clientName,
     token_endpoint_auth_method: 'client_secret_post',
