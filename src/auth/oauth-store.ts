@@ -14,6 +14,7 @@ const REDIRECT_URI_ALLOWLIST = [
   'https://*.windsurf.dev/**',
   'http://localhost:*/**',
   'http://127.0.0.1:*/**',
+  'https://smithery.run/oauth/callback',
 ];
 
 function globToRegex(p: string): RegExp {
