@@ -87,21 +87,6 @@ async function requireAuth(
   next();
 }
 
-// ─── MCP server-card (must come before OAuth router) ─────────────────────────
-// Tells Smithery (and other MCP registries) that auth is bearer-token, not OAuth
-// DCR. Without this, Smithery reads /.well-known/oauth-authorization-server and
-// tries RFC 7591 dynamic client registration, which fails with invalid_redirect_uri.
-app.get('/.well-known/mcp/server-card.json', (_req, res) => {
-  res.json({
-    name: 'BrainTube MCP',
-    description: 'Your personal AI second brain — search, ingest, and resurface knowledge via MCP.',
-    auth: {
-      type: 'bearer',
-      instructions: 'Provide your BrainTube JWT from brain-tube.com → Settings → API Keys as Authorization: Bearer <token>.'
-    }
-  });
-});
-
 // ─── OAuth 2.0 Authorization Server ──────────────────────────────────────────
 // Handles /.well-known/oauth-authorization-server, /oauth/register,
 // /oauth/authorize (GET login form + POST submit), /oauth/token
