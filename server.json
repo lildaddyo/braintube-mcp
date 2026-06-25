@@ -1,0 +1,26 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.lildaddyo/braintube-mcp",
+  "title": "BrainTube",
+  "description": "Personal AI knowledge base — ingest YouTube, articles, Notion, Obsidian, and Readwise into a searchable graph with deep search, concept extraction, and knowledge-health analytics.",
+  "repository": {
+    "url": "https://github.com/lildaddyo/braintube-mcp",
+    "source": "github"
+  },
+  "version": "3.11.0",
+  "websiteUrl": "https://brain-tube.com",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://brain-tube.com/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer token from your BrainTube API key (Settings → API Keys on brain-tube.com).",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}
