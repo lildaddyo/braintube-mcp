@@ -72,11 +72,38 @@ function readCookie(req: Request, name: string): string | null {
   return null;
 }
 
-// ─── OAuth Authorization Server Metadata ─────────────────────────────────────
-// Discovery doc intentionally not served — prevents MCP scanners (Smithery etc.)
-// from attempting OAuth DCR. Existing /oauth/* endpoints remain live so active
-// refresh tokens continue working; only new OAuth discovery is suppressed.
+// ─── OAuth Protected Resource Metadata (RFC 9728) ────────────────────────────
+// Claude.ai's MCP OAuth discovery starts here. The client fetches this first,
+// reads authorization_servers[0], then fetches the RFC 8414 doc from that host.
+// Serving this as the entry point is the modern pattern; the RFC 8414 doc below
+// is what Claude.ai actually needs to complete DCR and the auth flow.
 
+oauthRouter.get('/.well-known/oauth-protected-resource', (req: Request, res: Response) => {
+  const base = baseUrl(req);
+  res.json({
+    resource: base,
+    authorization_servers: [base],
+  });
+});
+
+// ─── OAuth Authorization Server Metadata (RFC 8414) ──────────────────────────
+// Claude.ai fetches this after reading oauth-protected-resource above.
+// Advertises the authorize, token, and DCR endpoints.
+
+oauthRouter.get('/.well-known/oauth-authorization-server', (req: Request, res: Response) => {
+  const base = baseUrl(req);
+  res.json({
+    issuer: base,
+    authorization_endpoint: `${base}/oauth/authorize`,
+    token_endpoint: `${base}/oauth/token`,
+    registration_endpoint: `${base}/oauth/register`,
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+    code_challenge_methods_supported: ['S256'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
+    scopes_supported: ['openid', 'profile', 'email'],
+  });
+});
 
 // ─── Dynamic Client Registration (RFC 7591) ───────────────────────────────────
 // Claude.ai registers itself before starting the auth flow.
