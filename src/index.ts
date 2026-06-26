@@ -91,7 +91,6 @@ async function requireAuth(
 // Handles /.well-known/oauth-authorization-server, /oauth/register,
 // /oauth/authorize (GET login form + POST submit), /oauth/token
 app.use(oauthRouter);
-});
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
