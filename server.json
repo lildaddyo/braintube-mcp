@@ -2,12 +2,12 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.lildaddyo/braintube-mcp",
   "title": "BrainTube",
-  "description": "Personal AI knowledge base: ingest YouTube, articles, Notion, and Readwise into a searchable graph.",
+  "description": "Personal knowledge MCP — semantically search everything you save (YouTube, articles, podcasts, PDFs, Notion, Obsidian, web) from any AI client. Per-user JWT auth, AI-agnostic.",
   "repository": {
     "url": "https://github.com/lildaddyo/braintube-mcp",
     "source": "github"
   },
-  "version": "3.12.0",
+  "version": "3.12.1",
   "websiteUrl": "https://brain-tube.com",
   "remotes": [
     {
