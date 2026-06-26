@@ -91,31 +91,6 @@ async function requireAuth(
 // Handles /.well-known/oauth-authorization-server, /oauth/register,
 // /oauth/authorize (GET login form + POST submit), /oauth/token
 app.use(oauthRouter);
-// ─── Smithery server card (skip live scan) ───────────────────────────────────
-// Serves capability metadata so Smithery can publish without a live MCP scan.
-// Format: https://smithery.ai/docs/build/publish#server-scanning
-app.get('/.well-known/mcp/server-card.json', (_req, res) => {
-  res.json({
-    serverInfo: { name: 'BrainTube', version: pkg.version },
-    authentication: { required: true, schemes: ['bearer'] },
-    tools: [
-      { name: 'search_knowledge', description: 'Semantic search across all saved items in a brain.' },
-      { name: 'deep_search', description: 'Multi-step AI search with reasoning and cross-brain synthesis.' },
-      { name: 'ingest_content', description: 'Save a URL (YouTube video, article, PDF, etc.) into a brain.' },
-      { name: 'list_brains', description: 'List all brains for the authenticated user with stats.' },
-      { name: 'get_knowledge_graph', description: 'Retrieve the concept knowledge graph for a brain.' },
-      { name: 'chat_with_brain', description: 'Chat with the AI assistant grounded in a specific brain.' },
-      { name: 'get_stats', description: 'Get item and storage statistics for a brain.' },
-      { name: 'random_resurface', description: 'Surface a random item for spaced-repetition review.' },
-      { name: 'list_recent', description: 'List recently ingested items in a brain.' },
-      { name: 'get_related', description: 'Find items semantically related to a given item.' },
-      { name: 'compile_knowledge', description: 'Generate a structured knowledge brief from brain contents.' },
-      { name: 'knowledge_health', description: 'Analyse knowledge-graph health and coverage gaps.' },
-      { name: 'export_claude_md', description: 'Export a CLAUDE.md knowledge brief for use in AI context windows.' }
-    ],
-    resources: [],
-    prompts: []
-  });
 });
 
 // ─── Health ───────────────────────────────────────────────────────────────────
