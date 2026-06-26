@@ -72,23 +72,11 @@ function readCookie(req: Request, name: string): string | null {
   return null;
 }
 
-// ─── OAuth Authorization Server Metadata (RFC 8414) ──────────────────────────
-// Claude.ai fetches this to discover the authorize + token endpoints.
+// ─── OAuth Authorization Server Metadata ─────────────────────────────────────
+// Discovery doc intentionally not served — prevents MCP scanners (Smithery etc.)
+// from attempting OAuth DCR. Existing /oauth/* endpoints remain live so active
+// refresh tokens continue working; only new OAuth discovery is suppressed.
 
-oauthRouter.get('/.well-known/oauth-authorization-server', (req: Request, res: Response) => {
-  const base = baseUrl(req);
-  res.json({
-    issuer: base,
-    authorization_endpoint: `${base}/oauth/authorize`,
-    token_endpoint: `${base}/oauth/token`,
-    registration_endpoint: `${base}/oauth/register`,
-    response_types_supported: ['code'],
-    grant_types_supported: ['authorization_code', 'refresh_token'],
-    code_challenge_methods_supported: ['S256'],
-    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
-    scopes_supported: ['openid', 'profile', 'email'],
-  });
-});
 
 // ─── Dynamic Client Registration (RFC 7591) ───────────────────────────────────
 // Claude.ai registers itself before starting the auth flow.
