@@ -7,7 +7,7 @@
     "url": "https://github.com/lildaddyo/braintube-mcp",
     "source": "github"
   },
-  "version": "3.12.1",
+  "version": "3.12.2",
   "websiteUrl": "https://brain-tube.com",
   "remotes": [
     {
@@ -15,8 +15,8 @@
       "url": "https://mcp.brain-tube.com/mcp",
       "headers": [
         {
-          "name": "Authorization",
-          "description": "Bearer token from your BrainTube API key (brain-tube.com -> Settings -> API Keys).",
+          "name": "X-BrainTube-Token",
+          "description": "Your BrainTube API key (create one in the app under Settings > API Keys).",
           "isRequired": true,
           "isSecret": true
         }
