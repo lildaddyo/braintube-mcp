@@ -9,7 +9,38 @@
 
 import { dbAdmin } from '../db/supabase.js';
 
-export type CreditAction = 'ai_search' | 'ai_chat';
+export type CreditAction = 'ai_search' | 'ai_chat' | 'deep_research';
+
+/**
+ * Entitlement gate: throws a user-facing MCP error if the user has no active
+ * paid subscription. Free users get 0 monthly credits — we distinguish them
+ * from paid users who exhausted their balance so each gets a different message.
+ *
+ * Canonical source: subscriptions table (status='active'). profiles.plan_tier
+ * is denormalized and can lag Stripe webhook delivery.
+ */
+export async function requirePaidPlan(userId: string): Promise<void> {
+  const { data, error } = await dbAdmin
+    .from('subscriptions')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error(`[credits] subscription check error for ${userId}:`, error.message);
+    // On DB error, fail open only for billing — still allow the tool call.
+    // Rationale: a billing check outage should not break the product entirely.
+    return;
+  }
+
+  if (!data) {
+    throw new Error(
+      'MCP access requires a paid BrainTube plan. Upgrade at https://brain-tube.com/pricing'
+    );
+  }
+}
 
 /**
  * Deduct credits for a tool call.
@@ -37,7 +68,7 @@ export async function requireCredits(
     // RPC-level error (not a business logic failure) — treat as insufficient credits
     // to avoid silently serving requests when billing is broken.
     throw new Error(
-      `Insufficient credits. Top up at https://brain-tube.com/credits`
+      `Monthly query limit reached for your plan — top up or upgrade at https://brain-tube.com/pricing`
     );
   }
 
@@ -47,7 +78,7 @@ export async function requireCredits(
     const reason = result?.reason ?? 'insufficient credits';
     console.warn(`[credits] deduct denied for ${toolName} (user=${userId}): ${reason}`);
     throw new Error(
-      `Insufficient credits. Top up at https://brain-tube.com/credits`
+      `Monthly query limit reached for your plan — top up or upgrade at https://brain-tube.com/pricing`
     );
   }
 
