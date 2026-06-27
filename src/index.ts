@@ -10,6 +10,7 @@ import { createMcpServer } from './server.js';
 import { getAuthContext } from './auth/jwt.js';
 import { handleObsidianSync } from './routes/obsidian-sync.js';
 import { oauthRouter } from './routes/oauth.js';
+import { serverCardRouter } from './routes/server-card.js';
 import { restRouter } from './routes/rest.js';
 import { buildOpenApiSpec } from './routes/openapi.js';
 import { ingestContent } from './tools/ingest.js';
@@ -86,6 +87,11 @@ async function requireAuth(
   (req as express.Request & { auth: AuthContext }).auth = auth;
   next();
 }
+
+// ─── Smithery server card (public, no auth) ───────────────────────────────────
+// Serves /.well-known/mcp/server-card.json so Smithery can populate the listing
+// without performing a live MCP scan (which hangs on OAuth discovery).
+app.use(serverCardRouter);
 
 // ─── OAuth 2.0 Authorization Server ──────────────────────────────────────────
 // Handles /.well-known/oauth-authorization-server, /oauth/register,
