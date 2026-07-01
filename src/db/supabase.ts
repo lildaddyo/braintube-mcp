@@ -191,7 +191,7 @@ export async function findItemByTitle(title: string, userId: string): Promise<st
  * Get-or-create tags by name and link them to the given item.
  * Non-fatal — a tag linking failure never aborts an ingest.
  */
-export async function linkTags(itemId: string, tagNames: string[]): Promise<void> {
+export async function linkTags(itemId: string, tagNames: string[], userId: string): Promise<void> {
   for (const raw of tagNames) {
     const name = raw.trim();
     if (!name) continue;
@@ -200,6 +200,7 @@ export async function linkTags(itemId: string, tagNames: string[]): Promise<void
         .from('tags')
         .select('id')
         .eq('name', name)
+        .eq('user_id', userId)
         .limit(1);
 
       let tagId: string | undefined = (existing ?? [])[0]?.id;
@@ -207,7 +208,7 @@ export async function linkTags(itemId: string, tagNames: string[]): Promise<void
       if (!tagId) {
         const { data: created } = await dbAdmin
           .from('tags')
-          .insert({ name })
+          .insert({ name, user_id: userId })
           .select('id')
           .single();
         tagId = created?.id;

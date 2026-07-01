@@ -42,17 +42,18 @@ async function resolveApiKey(token: string): Promise<string | null> {
 
 // ─── Tag helper ───────────────────────────────────────────────────────────────
 
-async function linkTags(itemId: string, tagNames: string[]): Promise<void> {
+async function linkTags(itemId: string, tagNames: string[], userId: string): Promise<void> {
   for (const raw of tagNames) {
     const name = raw.trim();
     if (!name) continue;
 
     try {
-      // Get or create tag
+      // Get or create tag (scoped to user)
       const { data: existing } = await dbAdmin
         .from('tags')
         .select('id')
         .eq('name', name)
+        .eq('user_id', userId)
         .limit(1);
 
       let tagId: string | undefined = (existing ?? [])[0]?.id;
@@ -60,7 +61,7 @@ async function linkTags(itemId: string, tagNames: string[]): Promise<void> {
       if (!tagId) {
         const { data: created } = await dbAdmin
           .from('tags')
-          .insert({ name })
+          .insert({ name, user_id: userId })
           .select('id')
           .single();
         tagId = created?.id;
@@ -196,7 +197,7 @@ export async function handleObsidianSync(
 
       // Link tags (best-effort)
       if (Array.isArray(note.tags) && note.tags.length > 0) {
-        await linkTags(itemId, note.tags);
+        await linkTags(itemId, note.tags, userId);
       }
 
       // Generate embedding (best-effort — failure should not fail the sync)

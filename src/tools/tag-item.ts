@@ -48,7 +48,7 @@ export async function tagItem(input: z.infer<typeof tagItemSchema>, userId: stri
 
   // Link added tags via join table so tag-based recall works
   if (added.length > 0) {
-    await linkTags(item_id, added);
+    await linkTags(item_id, added, userId);
   }
 
   // Remove deleted tags from join table
