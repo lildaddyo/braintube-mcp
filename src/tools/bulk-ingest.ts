@@ -136,7 +136,7 @@ export async function bulkIngest(
 
       // Link tags (best-effort)
       if (tags && tags.length > 0) {
-        await linkTags(itemId, tags);
+        await linkTags(itemId, tags, userId);
       }
 
       toEmbed.push(itemId);

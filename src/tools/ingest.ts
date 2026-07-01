@@ -98,7 +98,7 @@ export async function ingestContent(
 
   // ── Link tags (best-effort) ────────────────────────────────────────────────
   if (tags && tags.length > 0) {
-    await linkTags(itemId, tags);
+    await linkTags(itemId, tags, userId);
   }
 
   // ── Auto-embed (best-effort — failure saves item with embedding = NULL) ───
