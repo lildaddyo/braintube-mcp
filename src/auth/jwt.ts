@@ -39,6 +39,7 @@ async function validateApiKey(apiKey: string): Promise<AuthContext | null> {
       .from('api_keys')
       .select('user_id')
       .eq('key_hash', hash)
+      .eq('is_active', true)
       .single();
     if (!data?.user_id) return null;
     // Fire-and-forget last_used update

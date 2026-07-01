@@ -26,6 +26,7 @@ async function resolveApiKey(token: string): Promise<string | null> {
     .from('api_keys')
     .select('user_id')
     .eq('key_hash', hash)
+    .eq('is_active', true)
     .single();
 
   if (!data) return null;

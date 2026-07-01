@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { dbAdmin } from '../db/supabase.js';
+import { dbAdmin, linkTags } from '../db/supabase.js';
 
 export const tagItemSchema = z.object({
   item_id: z.string().uuid().describe('UUID of the item to tag'),
@@ -45,6 +45,26 @@ export async function tagItem(input: z.infer<typeof tagItemSchema>, userId: stri
 
   const added = toAdd.filter(t => !current.includes(t));
   const removed = current.filter(t => toRemove.has(t));
+
+  // Link added tags via join table so tag-based recall works
+  if (added.length > 0) {
+    await linkTags(item_id, added);
+  }
+
+  // Remove deleted tags from join table
+  if (removed.length > 0) {
+    const { data: removedTags } = await dbAdmin
+      .from('tags')
+      .select('id')
+      .in('name', removed);
+    if (removedTags?.length) {
+      await dbAdmin
+        .from('item_tags')
+        .delete()
+        .eq('item_id', item_id)
+        .in('tag_id', removedTags.map((t: { id: string }) => t.id));
+    }
+  }
 
   return {
     content: [{
