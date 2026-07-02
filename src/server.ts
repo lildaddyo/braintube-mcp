@@ -10,7 +10,11 @@ import { recentSchema, listRecent } from './tools/recent.js';
 import { statsSchema, getStats } from './tools/stats.js';
 import { noteSchema, addNote } from './tools/note.js';
 import { backfillEmbeddings } from './tools/embedding.js';
-import { ingestNotionPage, ingestNotionDatabase, setNotionApiKey } from './tools/notion-ingest.js';
+import {
+  ingestNotionPage, ingestNotionPageSchema,
+  ingestNotionDatabase, ingestNotionDatabaseSchema,
+  setNotionApiKey, setNotionApiKeySchema,
+} from './tools/notion-ingest.js';
 import { ingestContentSchema, ingestContent } from './tools/ingest.js';
 import { bulkIngestSchema, bulkIngest } from './tools/bulk-ingest.js';
 import { relatedSchema, getRelated } from './tools/related.js';
@@ -498,10 +502,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     'ingest_notion_page',
     {
       description: 'Ingest a single Notion page into your BrainTube corpus. Accepts a full Notion URL or raw page UUID. Extracts title + body text, upserts to items table, and immediately generates an embedding. Requires set_notion_api_key first.',
-      inputSchema: z.object({
-        page_url:  z.string().min(1).describe('Notion page URL (e.g. https://notion.so/My-Page-abc123) or raw UUID'),
-        force_new: z.boolean().default(false).describe('Skip dedup and always insert as new item')
-      }),
+      inputSchema: ingestNotionPageSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
     async (input) => {
@@ -618,10 +619,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     'ingest_notion_database',
     {
       description: 'Ingest all pages from a Notion database into your BrainTube corpus. Processes up to `limit` pages with 350ms delay between each. Requires set_notion_api_key first.',
-      inputSchema: z.object({
-        database_id: z.string().min(1).describe('Notion database ID (UUID format or from database URL)'),
-        limit: z.number().int().min(1).max(200).default(50).describe('Max pages to ingest (default 50)')
-      }),
+      inputSchema: ingestNotionDatabaseSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
     async (input) => {
@@ -642,9 +640,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     'set_notion_api_key',
     {
       description: 'Save your Notion integration API key so ingest_notion_page and ingest_notion_database can access your Notion workspace. Get your key from https://www.notion.so/my-integrations.',
-      inputSchema: z.object({
-        api_key: z.string().min(1).describe('Notion integration secret (starts with secret_...)')
-      }),
+      inputSchema: setNotionApiKeySchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
     async (input) => {
