@@ -8,6 +8,8 @@ import { dbAdmin } from '../db/supabase.js';
 import { findItemBySourceUrl, findItemByTitle } from '../db/supabase.js';
 import { embedItem } from './embedding.js';
 
+export { ingestNotionPageSchema, ingestNotionDatabaseSchema, setNotionApiKeySchema } from './notion-schemas.js';
+
 // ─── Notion client factory ────────────────────────────────────────────────────
 
 export async function getNotionClient(userId: string): Promise<Client> {

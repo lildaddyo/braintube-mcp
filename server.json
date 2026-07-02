@@ -16,8 +16,8 @@
       "headers": [
         {
           "name": "X-BrainTube-Token",
-          "description": "Your BrainTube API key (create one in the app under Settings > API Keys).",
-          "isRequired": true,
+          "description": "Optional — connect with a BrainTube API key from app.brain-tube.com → Settings → AI Integrations, or leave empty to sign in with OAuth.",
+          "isRequired": false,
           "isSecret": true
         }
       ]
