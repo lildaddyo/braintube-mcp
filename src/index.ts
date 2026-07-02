@@ -78,6 +78,10 @@ async function requireAuth(
 ) {
   const auth = await getAuthContext(req);
   if (!auth) {
+    res.set(
+      'WWW-Authenticate',
+      'Bearer realm="BrainTube MCP", resource_metadata="https://mcp.brain-tube.com/.well-known/oauth-protected-resource"'
+    );
     res.status(401).json({
       error: 'Unauthorized',
       message: 'Provide a valid BrainTube JWT via: (1) Authorization: Bearer <token> header, (2) X-BrainTube-Token header, or (3) ?token=<jwt> query parameter'
