@@ -70,17 +70,16 @@ import {
   ingestNotionDatabaseSchema, ingestNotionDatabaseOutputSchema,
   setNotionApiKeySchema, setNotionApiKeyOutputSchema,
 } from '../tools/notion-schemas.js';
-import { withEnvelope } from '../security/tool-envelope.js';
-
 function toInputSchema(schema: z.ZodTypeAny): Record<string, unknown> {
   return zodToJsonSchema(schema, { target: 'jsonSchema7' }) as Record<string, unknown>;
 }
 
-// Unioned with shortCircuitEnvelopeSchema (see src/security/tool-envelope.ts) so the
-// JSON Schema Smithery sees matches what the live server actually validates against —
-// server.ts's registerTool proxy applies the same withEnvelope() union at runtime.
+// Deliberately NOT unioned with shortCircuitEnvelopeSchema — see
+// src/security/tool-envelope.ts for why a top-level union breaks the MCP
+// SDK's runtime output validation (incident: commit 0cbcf01). This must
+// match exactly what's registered at runtime in server.ts.
 function toOutputSchema(schema: z.ZodTypeAny): Record<string, unknown> {
-  return zodToJsonSchema(withEnvelope(schema), { target: 'jsonSchema7' }) as Record<string, unknown>;
+  return zodToJsonSchema(schema, { target: 'jsonSchema7' }) as Record<string, unknown>;
 }
 
 // generate_api_key has no backing src/tools/ file (same as its inputSchema below,

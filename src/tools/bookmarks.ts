@@ -84,19 +84,19 @@ export const toggleBookmarkSchema = z.object({
   ),
 });
 
-export const toggleBookmarkOutputSchema = z.union([
-  z.object({
-    success: z.literal(true),
-    item_id: z.string(),
-    is_bookmark: z.boolean(),
-    is_read: z.boolean(),
-    bookmarked_at: z.string().nullable(),
-  }),
-  z.object({
-    success: z.literal(false),
-    error: z.string(),
-  }),
-]);
+// A flat object, not a union of success/error branches — the MCP SDK's
+// output validator (normalizeObjectSchema in the SDK's zod-compat layer)
+// only recognizes ZodObject/raw-shape schemas at the top level; a top-level
+// z.union(...) has no `.shape` and breaks every call to this tool (see
+// src/security/tool-envelope.ts for the full incident writeup).
+export const toggleBookmarkOutputSchema = z.object({
+  success: z.boolean(),
+  item_id: z.string().optional(),
+  is_bookmark: z.boolean().optional(),
+  is_read: z.boolean().optional(),
+  bookmarked_at: z.string().nullable().optional(),
+  error: z.string().optional(),
+});
 
 export async function toggleBookmark(
   input: z.infer<typeof toggleBookmarkSchema>,

@@ -10,15 +10,32 @@
  *      `description` string.
  *   4. `outputSchema` is declared at runtime (server.ts) AND on the static
  *      listing (server-card.ts) for every tool.
- *   5. Every static `outputSchema` was built through withEnvelope() — i.e.
- *      it actually unions in shortCircuitEnvelopeSchema's three status
- *      literals — not just some arbitrary schema that happens to be present.
- *   6. secureWrap's cross-cutting short-circuits (role denial, injection
+ *   5. No tool's static `outputSchema` is a top-level union (`anyOf`/`oneOf`
+ *      at the root). The MCP SDK's runtime output validator —
+ *      normalizeObjectSchema() in its zod-compat layer — only recognizes
+ *      ZodObject/raw-shape schemas via `.shape`; a top-level z.union(...) has
+ *      none, so it silently returns undefined and the next call,
+ *      safeParseAsync(undefined, ...), throws "Cannot read properties of
+ *      undefined (reading '_zod')" on every successful tool call. This is
+ *      exactly what broke production in commit 0cbcf01 (a since-removed
+ *      withEnvelope() helper unioned every outputSchema with a shared
+ *      envelope). server-card.ts's zodToJsonSchema path renders unions fine
+ *      (`anyOf`) — this check exists precisely because that made the static
+ *      listing look correct while the live server was broken. See
+ *      src/security/tool-envelope.ts and src/server-output-schema.test.ts
+ *      for the full incident writeup and a live SDK-level regression test.
+ *   6. src/server.ts's registerTool() proxy never wraps `outputSchema` in
+ *      anything (no `z.union(` / `withEnvelope(` near an `outputSchema:`
+ *      assignment inside the proxy body) — a static guard against
+ *      reintroducing check #5's bug inside the proxy itself, which
+ *      server-output-schema.test.ts's dynamic checks can't catch because
+ *      they register schemas directly rather than through this proxy.
+ *   7. secureWrap's cross-cutting short-circuits (role denial, injection
  *      reject, confirm-required preview) all go through shortCircuitResult()
- *      rather than constructing a raw `{ content: [...] }` result — the
- *      only way to guarantee they carry a structuredContent envelope that
- *      conforms to every tool's (unioned) outputSchema. Catches a future
- *      4th short-circuit path added without the helper.
+ *      rather than constructing a raw `{ content: [...] }` result — that
+ *      helper marks its result isError:true so the SDK skips structuredContent
+ *      validation for it entirely. Catches a future 4th short-circuit path
+ *      added without the helper.
  *
  * server.ts's registerTool() calls can't be executed directly here (they run
  * inside createMcpServer(), which requires a live Supabase-backed
@@ -117,8 +134,41 @@ function checkSecureWrapEnvelopeGuard(src: string): string[] {
   if (rawLiteralReturns.length > 0) {
     failures.push(
       `SHORT-CIRCUIT GUARD: found ${rawLiteralReturns.length} raw "return { content: ... }" literal(s) in ` +
-      `secureWrap's pre-handler region that bypass shortCircuitResult() — these won't carry a conforming ` +
-      `structuredContent envelope once outputSchema is declared. Route them through shortCircuitResult() instead.`
+      `secureWrap's pre-handler region that bypass shortCircuitResult() — these won't be marked isError:true, ` +
+      `so the SDK will require them to carry a conforming structuredContent they can never have. Route them ` +
+      `through shortCircuitResult() instead.`
+    );
+  }
+
+  return failures;
+}
+
+/**
+ * Asserts the registerTool proxy (the `(server as any).registerTool = (name, def, handler) => { ... }`
+ * closure) never wraps `outputSchema` in a union or the old withEnvelope()
+ * helper. Scoped to the region between the proxy's assignment and its
+ * `return _origRegister(...)` call. This is a static guard for check #5's
+ * bug class specifically inside the proxy — server-output-schema.test.ts's
+ * dynamic checks register schemas directly and don't exercise this closure,
+ * so they can't catch a regression reintroduced here.
+ */
+function checkRegistrationProxyDoesNotWrapOutputSchema(src: string): string[] {
+  const failures: string[] = [];
+  const proxyStart = src.indexOf('(server as any).registerTool = (name');
+  if (proxyStart === -1) {
+    return ['registerTool proxy assignment not found in server.ts — cannot verify outputSchema is unwrapped'];
+  }
+  const proxyEnd = src.indexOf('return _origRegister(', proxyStart);
+  if (proxyEnd === -1) {
+    return ['registerTool proxy: "return _origRegister(" marker not found — cannot bound the proxy body'];
+  }
+  const proxyBody = src.slice(proxyStart, proxyEnd);
+
+  if (/z\.union\(|withEnvelope\(/.test(proxyBody)) {
+    failures.push(
+      `REGISTRATION PROXY GUARD: found z.union(/withEnvelope( inside the registerTool proxy body — ` +
+      `outputSchema must pass through unmodified (see incident notes in this file's header comment). ` +
+      `Wrapping outputSchema in a top-level union here will break every call to every tool that has one.`
     );
   }
 
@@ -133,9 +183,6 @@ function sortKeys(obj: unknown): unknown {
   if (obj === null || typeof obj !== 'object') return obj;
   return Object.fromEntries(Object.entries(obj as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)));
 }
-
-/** Envelope status literals from src/security/tool-envelope.ts's shortCircuitEnvelopeSchema. */
-const ENVELOPE_STATUS_LITERALS = ['access_denied', 'injection_blocked', 'confirmation_required'];
 
 function main() {
   const runtimeToolMeta = extractRuntimeToolMeta(serverTsSrc);
@@ -155,7 +202,7 @@ function main() {
   if (runtimeNames.size !== 52) failures.push(`EXPECTED 52 tools registered in server.ts, found ${runtimeNames.size}`);
   if (cardNames.size !== 52) failures.push(`EXPECTED 52 tools in server-card.ts TOOLS, found ${cardNames.size}`);
 
-  // ── 2, 3 & 4. Per-tool checks ────────────────────────────────────────────
+  // ── 2, 3, 4 & 5. Per-tool checks ──────────────────────────────────────────
   for (const tool of TOOLS) {
     const runtimeMeta = runtimeToolMeta.get(tool.name);
     if (runtimeMeta && !deepEqual(runtimeMeta.annotations, tool.annotations)) {
@@ -181,23 +228,23 @@ function main() {
     if (runtimeMeta && !runtimeMeta.hasOutputSchema) {
       failures.push(`NO OUTPUT SCHEMA (server.ts): "${tool.name}" registerTool call has no outputSchema`);
     }
-    const cardTool = tool as { outputSchema?: unknown };
+    const cardTool = tool as { outputSchema?: { anyOf?: unknown; oneOf?: unknown } };
     if (!cardTool.outputSchema) {
       failures.push(`NO OUTPUT SCHEMA (server-card.ts): "${tool.name}" TOOLS entry has no outputSchema`);
-    } else {
-      // ── envelope union present ─────────────────────────────────────────
-      const outputSchemaJson = JSON.stringify(cardTool.outputSchema);
-      const missingLiterals = ENVELOPE_STATUS_LITERALS.filter(lit => !outputSchemaJson.includes(lit));
-      if (missingLiterals.length > 0) {
-        failures.push(
-          `OUTPUT SCHEMA MISSING ENVELOPE: "${tool.name}" outputSchema doesn't include shortCircuitEnvelopeSchema's ` +
-          `status literals (missing: ${missingLiterals.join(', ')}) — was it built with toOutputSchema() / withEnvelope()?`
-        );
-      }
+    } else if (cardTool.outputSchema.anyOf || cardTool.outputSchema.oneOf) {
+      // ── top-level union guard (the exact 0cbcf01 bug class) ──────────────
+      failures.push(
+        `OUTPUT SCHEMA IS A TOP-LEVEL UNION: "${tool.name}" outputSchema has anyOf/oneOf at the root — ` +
+        `the MCP SDK's runtime validator can't normalize this to an object schema and will crash every ` +
+        `call to this tool. See incident notes in this file's header comment.`
+      );
     }
   }
 
-  // ── 5. secureWrap short-circuit envelope guard ───────────────────────────
+  // ── 6. registerTool proxy must not wrap outputSchema ──────────────────────
+  failures.push(...checkRegistrationProxyDoesNotWrapOutputSchema(serverTsSrc));
+
+  // ── 7. secureWrap short-circuit guard ─────────────────────────────────────
   failures.push(...checkSecureWrapEnvelopeGuard(serverTsSrc));
 
   if (failures.length > 0) {
@@ -207,7 +254,7 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`✓ server-card parity check PASSED — ${TOOLS.length} tools, names match, annotations deep-equal, every param described, outputSchema present + enveloped on all tools, secureWrap short-circuits guarded.`);
+  console.log(`✓ server-card parity check PASSED — ${TOOLS.length} tools, names match, annotations deep-equal, every param described, outputSchema present on all tools with no top-level unions, registration proxy leaves outputSchema unwrapped, secureWrap short-circuits guarded.`);
 }
 
 main();
