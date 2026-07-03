@@ -9,13 +9,6 @@ export const findPathSchema = z.object({
   ),
 });
 
-export const findPathOutputSchema = z.object({
-  found: z.boolean(),
-  path_item_ids: z.array(z.string()),
-  path_edge_types: z.array(z.string()),
-  path_length: z.number().nullable(),
-});
-
 export async function findPath(
   input: z.infer<typeof findPathSchema>
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {

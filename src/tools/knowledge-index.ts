@@ -3,19 +3,6 @@ import { dbAdmin } from '../db/supabase.js';
 
 export const knowledgeIndexSchema = z.object({});
 
-export const getKnowledgeIndexOutputSchema = z.object({
-  total_items: z.number(),
-  total_topics: z.number(),
-  topics: z.array(z.object({
-    topic_primary: z.string().optional(),
-    item_count: z.number().optional(),
-    synthesis_count: z.number().optional(),
-    avg_salience: z.number().nullable().optional(),
-    latest_item: z.string().optional(),
-    source_types: z.array(z.string()).optional(),
-  }).passthrough()),
-});
-
 interface TopicRow {
   topic_primary: string;
   item_count: number;

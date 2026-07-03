@@ -19,15 +19,6 @@ export const chatWithBrainSchema = z.object({
   session_id:   z.string().optional().describe('Session ID from a previous turn — pass to continue the same conversation thread'),
 });
 
-export const chatWithBrainOutputSchema = z.object({
-  answer: z.string(),
-  sources: z.array(z.object({
-    title: z.string().optional(),
-    url: z.string().optional(),
-  }).passthrough()).optional(),
-  session_id: z.string().optional(),
-}).passthrough();
-
 const BRAIN_CHAT_URL = 'https://iqjnmmtvhyavgrsxpoao.supabase.co/functions/v1/brain-chat';
 
 export async function chatWithBrain(
@@ -72,17 +63,6 @@ export async function chatWithBrain(
 // ── list_brains ───────────────────────────────────────────────────────────────
 
 export const listBrainsSchema = z.object({});
-
-export const listBrainsOutputSchema = z.object({
-  brains: z.array(z.object({
-    slug: z.string(),
-    name: z.string().optional(),
-    description: z.string().nullable().optional(),
-    item_count: z.number().optional(),
-    tier: z.string().optional(),
-    is_public: z.boolean().optional(),
-  }).passthrough()),
-});
 
 export interface BrainRow {
   slug:        string;

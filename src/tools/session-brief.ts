@@ -5,27 +5,6 @@ import { getRecentConversations } from './recent-conversations.js';
 
 export const sessionBriefSchema = z.object({});
 
-export const getSessionBriefOutputSchema = z.object({
-  expertise: z.object({
-    expert_topics: z.array(z.string()).optional(),
-    intermediate_topics: z.array(z.string()).optional(),
-    surface_topics: z.array(z.string()).optional(),
-    blind_spots: z.array(z.string()).optional(),
-    recent_focus: z.array(z.string()).optional(),
-    dominant_sources: z.array(z.object({ source: z.string(), count: z.number() })).optional(),
-  }).passthrough(),
-  recent_work: z.array(z.object({
-    title: z.string().optional(),
-    summary: z.string().optional(),
-    date: z.string().optional(),
-    source_url: z.string().nullable().optional(),
-  }).passthrough()),
-  corpus_stats: z.object({
-    total: z.number(),
-    last_added: z.string().optional(),
-  }).passthrough(),
-});
-
 function timeAgo(date: string): string {
   const ms = Date.now() - new Date(date).getTime();
   const mins = Math.floor(ms / 60000);

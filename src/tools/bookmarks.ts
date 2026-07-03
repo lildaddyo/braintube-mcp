@@ -12,18 +12,6 @@ export const listBookmarksSchema = z.object({
   ),
 });
 
-export const listBookmarksOutputSchema = z.object({
-  bookmarks: z.array(z.object({
-    id: z.string(),
-    title: z.string().optional(),
-    source_url: z.string().optional(),
-    source_type: z.string().optional(),
-    tags: z.array(z.string()).optional(),
-    is_read: z.boolean().optional(),
-    bookmarked_at: z.string().optional(),
-  }).passthrough()),
-});
-
 export async function listBookmarks(
   input: z.infer<typeof listBookmarksSchema>,
   userId: string
@@ -83,20 +71,6 @@ export const toggleBookmarkSchema = z.object({
     'bookmark: flag item + set bookmarked_at | unbookmark: clear flag | mark_read/mark_unread: toggle read state'
   ),
 });
-
-export const toggleBookmarkOutputSchema = z.union([
-  z.object({
-    success: z.literal(true),
-    item_id: z.string(),
-    is_bookmark: z.boolean(),
-    is_read: z.boolean(),
-    bookmarked_at: z.string().nullable(),
-  }),
-  z.object({
-    success: z.literal(false),
-    error: z.string(),
-  }),
-]);
 
 export async function toggleBookmark(
   input: z.infer<typeof toggleBookmarkSchema>,

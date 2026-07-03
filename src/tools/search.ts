@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { dbAdmin, semanticSearch, adaptiveSearchRpc, incrementRetrievalStats } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
-import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 import type { AdaptiveResult } from '../db/supabase.js';
 
 async function logRetrieval(
@@ -33,8 +32,6 @@ export const searchSchema = z.object({
     'Number of results to return (default 5, max 20)'
   )
 });
-
-export const searchKnowledgeOutputSchema = taintedListSchema(looseItemSchema);
 
 export async function searchKnowledge(input: z.infer<typeof searchSchema>, userId: string) {
   const { query, limit } = input;
@@ -86,8 +83,7 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
       content: [{
         type: 'text' as const,
         text: `No results found for "${query}". Try broader terms or call get_stats to check corpus coverage.`
-      }],
-      structuredContent: { data: [], taint_level: 0 } as unknown as Record<string, unknown>
+      }]
     };
   }
 

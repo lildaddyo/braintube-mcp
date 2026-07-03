@@ -11,12 +11,10 @@ export const connectReadwiseSchema = z.object({
   ),
 });
 
-export const connectReadwiseOutputSchema = z.object({}).passthrough();
-
 export async function connectReadwise(
   input: z.infer<typeof connectReadwiseSchema>,
   userJwt: string
-): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent?: Record<string, unknown> }> {
+): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const res = await fetch(READWISE_SYNC_URL, {
     method: 'POST',
     headers: {
@@ -30,10 +28,7 @@ export async function connectReadwise(
   const data = await res.json().catch(() => ({ error: 'Invalid JSON response' }));
   if (!res.ok) throw new Error(`connect_readwise: ${data?.error ?? res.statusText}`);
 
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(data) }],
-    structuredContent: (data && typeof data === 'object' && !Array.isArray(data) ? data : { result: data }) as Record<string, unknown>
-  };
+  return { content: [{ type: 'text' as const, text: JSON.stringify(data) }] };
 }
 
 // ─── sync_readwise ────────────────────────────────────────────────────────────
@@ -44,12 +39,10 @@ export const syncReadwiseSchema = z.object({
   ),
 });
 
-export const syncReadwiseOutputSchema = z.object({}).passthrough();
-
 export async function syncReadwise(
   input: z.infer<typeof syncReadwiseSchema>,
   userJwt: string
-): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent?: Record<string, unknown> }> {
+): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const res = await fetch(READWISE_SYNC_URL, {
     method: 'POST',
     headers: {
@@ -63,8 +56,5 @@ export async function syncReadwise(
   const data = await res.json().catch(() => ({ error: 'Invalid JSON response' }));
   if (!res.ok) throw new Error(`sync_readwise: ${data?.error ?? res.statusText}`);
 
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(data) }],
-    structuredContent: (data && typeof data === 'object' && !Array.isArray(data) ? data : { result: data }) as Record<string, unknown>
-  };
+  return { content: [{ type: 'text' as const, text: JSON.stringify(data) }] };
 }

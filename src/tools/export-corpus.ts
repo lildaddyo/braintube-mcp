@@ -5,8 +5,6 @@ const EXPORT_CORPUS_URL =
 
 export const exportCorpusSchema = z.object({});
 
-export const exportCorpusOutputSchema = z.object({}).passthrough();
-
 export async function exportCorpus(
   _input: z.infer<typeof exportCorpusSchema>,
   userJwt?: string

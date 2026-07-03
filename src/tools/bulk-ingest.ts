@@ -29,13 +29,6 @@ export const bulkIngestSchema = z.object({
   ),
 });
 
-export const bulkIngestOutputSchema = z.object({
-  inserted: z.number(),
-  updated: z.number(),
-  skipped: z.number(),
-  errors: z.array(z.string()),
-});
-
 // ─── Result types ─────────────────────────────────────────────────────────────
 
 export interface BulkIngestResult {

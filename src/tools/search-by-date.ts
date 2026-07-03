@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { dbAdmin, incrementRetrievalStats } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
-import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 
 export const searchByDateSchema = z.object({
   query: z.string().min(1).max(500).describe('Natural language search query'),
@@ -10,8 +9,6 @@ export const searchByDateSchema = z.object({
   before: z.string().describe('ISO 8601 date — only items created before this date. Examples: "2024-12-31", "2025-03-01T00:00:00Z"'),
   limit: z.number().int().min(1).max(20).default(10).describe('Number of results to return (default 10)')
 });
-
-export const searchByDateOutputSchema = taintedListSchema(looseItemSchema);
 
 export async function searchByDate(input: z.infer<typeof searchByDateSchema>, userId: string) {
   const { query, after, before, limit } = input;
@@ -78,8 +75,7 @@ export async function searchByDate(input: z.infer<typeof searchByDateSchema>, us
       content: [{
         type: 'text' as const,
         text: `No results for "${query}" between ${after} and ${before}. Try wider date range or different terms.`
-      }],
-      structuredContent: { data: [], taint_level: 0 } as unknown as Record<string, unknown>
+      }]
     };
   }
 

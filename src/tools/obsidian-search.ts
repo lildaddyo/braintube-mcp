@@ -14,16 +14,6 @@ export const searchObsidianSchema = z.object({
   limit: z.number().int().min(1).max(50).default(5).describe('Max results to return (default 5, max 50)'),
 });
 
-export const searchObsidianOutputSchema = z.object({
-  results: z.array(z.object({
-    title: z.string().optional(),
-    path: z.string().optional(),
-    excerpt: z.string().optional(),
-    tags: z.array(z.string()).optional(),
-  }).passthrough()),
-  message: z.string().optional(),
-});
-
 export interface ObsidianResult {
   title:   string;
   path:    string;

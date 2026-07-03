@@ -2,26 +2,12 @@ import { z } from 'zod';
 import { dbAdmin, adaptiveSearchRpc } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
-import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 
 export const deepSearchSchema = z.object({
   query: z.string().min(1).max(500).describe('Search query'),
   max_hops: z.number().int().min(1).max(3).default(2).describe(
     'Graph traversal depth from each top result (default 2)'
   ),
-});
-
-export const deepSearchOutputSchema = z.object({
-  direct_results: z.array(looseItemSchema),
-  graph_connected: z.array(z.object({
-    id: z.string(),
-    title: z.string().optional(),
-    source_type: z.string().optional(),
-    salience_score: z.number().nullable().optional(),
-    via_item_id: z.string().optional(),
-  }).passthrough()),
-  total_nodes_explored: z.number(),
-  tainted_direct: taintedListSchema(looseItemSchema),
 });
 
 export async function deepSearch(
