@@ -1,5 +1,12 @@
+import { z } from 'zod';
 import { dbAdmin } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
+
+export const backfillEmbeddingsOutputSchema = z.object({
+  embedded: z.number(),
+  errors: z.number(),
+  firstError: z.string().optional(),
+});
 
 // ─── Text builder ─────────────────────────────────────────────────────────────
 

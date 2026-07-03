@@ -3,6 +3,19 @@ import { dbAdmin } from '../db/supabase.js';
 
 export const knowledgeHealthSchema = z.object({});
 
+export const knowledgeHealthOutputSchema = z.object({
+  total_items: z.number().optional(),
+  missing_embeddings: z.number().optional(),
+  missing_enrichment: z.number().optional(),
+  missing_tags: z.number().optional(),
+  orphan_items: z.number().optional(),
+  stale_items_90d: z.number().optional(),
+  contradictions: z.number().optional(),
+  review_overdue: z.number().optional(),
+  topic_gaps: z.union([z.array(z.object({ topic: z.string(), count: z.number() }).passthrough()), z.number()]).optional(),
+  health_score: z.number().optional(),
+}).passthrough();
+
 export async function knowledgeHealth(_input: z.infer<typeof knowledgeHealthSchema>, userId: string) {
   const { data, error } = await dbAdmin.rpc('knowledge_health', { for_user_id: userId });
 
@@ -24,7 +37,10 @@ export async function knowledgeHealth(_input: z.infer<typeof knowledgeHealthSche
   } | null;
 
   if (!h) {
-    return { content: [{ type: 'text' as const, text: 'No health data returned.' }] };
+    return {
+      content: [{ type: 'text' as const, text: 'No health data returned.' }],
+      structuredContent: {} as unknown as Record<string, unknown>
+    };
   }
 
   // health_score is 0–1 float from DB — convert to 0–100 for display

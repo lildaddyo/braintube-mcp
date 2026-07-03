@@ -27,6 +27,12 @@ export const ingestContentSchema = z.object({
   ),
 });
 
+export const ingestContentOutputSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  action: z.enum(['inserted', 'updated']),
+});
+
 // ─── Implementation ───────────────────────────────────────────────────────────
 
 export async function ingestContent(

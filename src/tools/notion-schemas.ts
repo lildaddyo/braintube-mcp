@@ -25,3 +25,19 @@ export const ingestNotionDatabaseSchema = z.object({
 export const setNotionApiKeySchema = z.object({
   api_key: z.string().min(1).describe('Notion integration secret (starts with secret_...)')
 });
+
+export const ingestNotionPageOutputSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  action: z.enum(['inserted', 'updated']),
+});
+
+export const ingestNotionDatabaseOutputSchema = z.object({
+  ingested: z.number(),
+  updated: z.number(),
+  errors: z.array(z.string()),
+});
+
+export const setNotionApiKeyOutputSchema = z.object({
+  saved: z.literal(true),
+});

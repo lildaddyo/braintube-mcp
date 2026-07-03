@@ -8,7 +8,7 @@ import { dbAdmin } from '../db/supabase.js';
 import { findItemBySourceUrl, findItemByTitle } from '../db/supabase.js';
 import { embedItem } from './embedding.js';
 
-export { ingestNotionPageSchema, ingestNotionDatabaseSchema, setNotionApiKeySchema } from './notion-schemas.js';
+export { ingestNotionPageSchema, ingestNotionDatabaseSchema, setNotionApiKeySchema, ingestNotionPageOutputSchema, ingestNotionDatabaseOutputSchema, setNotionApiKeyOutputSchema } from './notion-schemas.js';
 
 // ─── Notion client factory ────────────────────────────────────────────────────
 

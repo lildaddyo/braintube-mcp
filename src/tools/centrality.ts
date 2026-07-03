@@ -3,6 +3,10 @@ import { dbAdmin } from '../db/supabase.js';
 
 export const computeCentralitySchema = z.object({});
 
+export const computeCentralityOutputSchema = z.object({
+  updated_count: z.number().nullable(),
+});
+
 export async function computeCentrality(
   _input: z.infer<typeof computeCentralitySchema>,
   userId: string
