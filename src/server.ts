@@ -59,7 +59,6 @@ import {
   firewallRuleHistorySchema, firewallRuleHistory, firewallRuleHistoryOutputSchema,
 } from './tools/firewall-admin.js';
 import { connectReadwiseSchema, connectReadwise, connectReadwiseOutputSchema, syncReadwiseSchema, syncReadwise, syncReadwiseOutputSchema } from './tools/readwise.js';
-import { withEnvelope, shortCircuitEnvelopeSchema } from './security/tool-envelope.js';
 import type { ShortCircuitStatus } from './security/tool-envelope.js';
 import { requireCredits, requirePaidPlan } from './lib/credits.js';
 import { dbAdmin } from './db/supabase.js';
@@ -167,15 +166,18 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
    * The ONLY way secureWrap's cross-cutting short-circuits (role denial,
    * injection rejection, confirm-required preview) should build their result.
    * These bypass the tool's own handler, so they can never conform to a
-   * tool-specific outputSchema — every declared outputSchema is unioned with
-   * shortCircuitEnvelopeSchema (see registerTool proxy below) so this shape
-   * always validates. scripts/verify-server-card-parity.ts asserts no other
+   * tool-specific outputSchema — marked isError:true so the MCP SDK's
+   * validateToolOutput() skips structuredContent validation for them entirely
+   * (see src/security/tool-envelope.ts for why NOT to union a shared envelope
+   * into outputSchema instead — that approach broke every tool call in
+   * commit 0cbcf01). scripts/verify-server-card-parity.ts asserts no other
    * `return { content: ... }` inside secureWrap bypasses this helper.
    */
   function shortCircuitResult(status: ShortCircuitStatus, message: string) {
     return {
       content: [{ type: 'text' as const, text: message }],
       structuredContent: { status, message } as unknown as Record<string, unknown>,
+      isError: true,
     };
   }
 
@@ -370,15 +372,10 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       };
     }
 
-    // ── Union outputSchema with the short-circuit envelope ───────────────────
-    // secureWrap's cross-cutting short-circuits (role denial, injection reject,
-    // confirm-required preview) return { status, message } — never a
-    // tool-specific shape — so every declared outputSchema must accept that
-    // envelope too, or the MCP SDK's mandatory structuredContent validation
-    // rejects those paths once outputSchema is present.
-    if (def?.outputSchema) {
-      securedDef = { ...securedDef, outputSchema: withEnvelope(def.outputSchema) };
-    }
+    // outputSchema (if the tool declared one) passes through unmodified — do
+    // NOT union it with anything here. secureWrap's short-circuits mark
+    // themselves isError:true instead, so they never need to conform (see
+    // shortCircuitResult() above and src/security/tool-envelope.ts for why).
 
     // Track for startup audit
     registeredToolMeta.push({ name, description: securedDef.description ?? '' });
