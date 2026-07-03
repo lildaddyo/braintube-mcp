@@ -46,7 +46,15 @@ async function validateApiKey(apiKey: string): Promise<AuthContext | null> {
     void adminClient
       .from('api_keys')
       .update({ last_used: new Date().toISOString() })
-      .eq('key_hash', hash);
+      .eq('key_hash', hash)
+      .then(
+        ({ error }) => {
+          if (error) console.error(`[auth] last_used update failed for key hash ${hash.slice(0, 8)}…: ${error.message}`);
+        },
+        (err: unknown) => {
+          console.error(`[auth] last_used update threw for key hash ${hash.slice(0, 8)}…: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      );
     console.log('[auth] api key validated');
     return { userId: data.user_id as string, authMethod: 'apikey' };
   } catch {

@@ -35,7 +35,15 @@ async function resolveApiKey(token: string): Promise<string | null> {
   void dbAdmin
     .from('api_keys')
     .update({ last_used: new Date().toISOString() })
-    .eq('key_hash', hash);
+    .eq('key_hash', hash)
+    .then(
+      ({ error }) => {
+        if (error) console.error(`[obsidian-sync] last_used update failed for key hash ${hash.slice(0, 8)}…: ${error.message}`);
+      },
+      (err: unknown) => {
+        console.error(`[obsidian-sync] last_used update threw for key hash ${hash.slice(0, 8)}…: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    );
 
   return data.user_id as string;
 }

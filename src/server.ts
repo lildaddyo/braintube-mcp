@@ -840,7 +840,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       outputSchema: exportCorpusOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
-    (input) => exportCorpus(input, auth.rawToken)
+    (input) => exportCorpus(input, auth.rawToken ?? '')
   );
 
   server.registerTool(
@@ -854,7 +854,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     async (input) => {
       await requirePaidPlan(auth.userId);
       await requireCredits(auth.userId, 'ai_chat', 'compile_knowledge');
-      return compileKnowledge(input, auth.rawToken);
+      return compileKnowledge(input, auth.rawToken ?? '');
     }
   );
 
