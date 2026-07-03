@@ -7,6 +7,13 @@ export const tagItemSchema = z.object({
   remove: z.array(z.string().min(1).max(50)).default([]).describe('Tags to remove')
 });
 
+export const tagItemOutputSchema = z.object({
+  item_id: z.string(),
+  tags: z.array(z.string()),
+  added: z.array(z.string()),
+  removed: z.array(z.string()),
+});
+
 export async function tagItem(input: z.infer<typeof tagItemSchema>, userId: string) {
   const { item_id, add, remove } = input;
 

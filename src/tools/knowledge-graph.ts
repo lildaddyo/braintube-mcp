@@ -8,6 +8,28 @@ export const knowledgeGraphSchema = z.object({
   )
 });
 
+const graphNodeOutputSchema = z.object({
+  id: z.string(),
+  title: z.string().optional(),
+  source_type: z.string().optional(),
+  salience_score: z.number().nullable().optional(),
+}).passthrough();
+
+export const getKnowledgeGraphOutputSchema = z.object({
+  center_item: graphNodeOutputSchema,
+  nodes: z.array(graphNodeOutputSchema),
+  edges: z.array(z.object({
+    source_id: z.string(),
+    target_id: z.string(),
+    edge_type: z.string().optional(),
+    confidence: z.number().nullable().optional(),
+  }).passthrough()),
+  stats: z.object({
+    total_nodes: z.number(),
+    total_edges: z.number(),
+  }).passthrough(),
+});
+
 interface KnowledgeEdge {
   source_id: string;
   target_id: string;
