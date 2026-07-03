@@ -7,6 +7,15 @@ export const recentConversationsSchema = z.object({
   )
 });
 
+export const getRecentConversationsOutputSchema = z.object({
+  conversations: z.array(z.object({
+    title: z.string().optional(),
+    summary: z.string().optional(),
+    date: z.string().optional(),
+    source_url: z.string().nullable().optional(),
+  }).passthrough()),
+});
+
 export interface ConversationItem {
   title: string;
   summary: string;
