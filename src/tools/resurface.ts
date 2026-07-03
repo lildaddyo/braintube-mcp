@@ -1,15 +1,12 @@
 import { z } from 'zod';
 import { dbAdmin, incrementRetrievalStats } from '../db/supabase.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
-import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 
 export const resurfaceSchema = z.object({
   n: z.number().int().min(1).max(20).default(5).describe(
     'Number of items to resurface (default 5). Weighted toward items you\'ve retrieved least often.'
   )
 });
-
-export const randomResurfaceOutputSchema = taintedListSchema(looseItemSchema);
 
 export async function randomResuface(input: z.infer<typeof resurfaceSchema>, userId: string) {
   const { n } = input;
@@ -27,8 +24,7 @@ export async function randomResuface(input: z.infer<typeof resurfaceSchema>, use
       content: [{
         type: 'text' as const,
         text: 'No items in your corpus yet. Save some videos or content first.'
-      }],
-      structuredContent: { data: [], taint_level: 0 } as unknown as Record<string, unknown>
+      }]
     };
   }
 

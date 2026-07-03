@@ -3,13 +3,6 @@ import { dbAdmin } from '../db/supabase.js';
 
 export const exportClaudeMdSchema = z.object({});
 
-export const exportClaudeMdOutputSchema = z.object({
-  total_items: z.number(),
-  total_topics: z.number(),
-  total_articles: z.number(),
-  markdown: z.string(),
-});
-
 export async function exportClaudeMd(
   _input: z.infer<typeof exportClaudeMdSchema>,
   userId: string

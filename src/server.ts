@@ -4,63 +4,61 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
-import { searchSchema, searchKnowledge, searchKnowledgeOutputSchema } from './tools/search.js';
-import { videoSchema, getVideo, getVideoOutputSchema } from './tools/video.js';
-import { recentSchema, listRecent, listRecentOutputSchema } from './tools/recent.js';
-import { statsSchema, getStats, getStatsOutputSchema } from './tools/stats.js';
-import { noteSchema, addNote, addNoteOutputSchema } from './tools/note.js';
-import { backfillEmbeddings, backfillEmbeddingsOutputSchema } from './tools/embedding.js';
+import { searchSchema, searchKnowledge } from './tools/search.js';
+import { videoSchema, getVideo } from './tools/video.js';
+import { recentSchema, listRecent } from './tools/recent.js';
+import { statsSchema, getStats } from './tools/stats.js';
+import { noteSchema, addNote } from './tools/note.js';
+import { backfillEmbeddings } from './tools/embedding.js';
 import {
-  ingestNotionPage, ingestNotionPageSchema, ingestNotionPageOutputSchema,
-  ingestNotionDatabase, ingestNotionDatabaseSchema, ingestNotionDatabaseOutputSchema,
-  setNotionApiKey, setNotionApiKeySchema, setNotionApiKeyOutputSchema,
+  ingestNotionPage, ingestNotionPageSchema,
+  ingestNotionDatabase, ingestNotionDatabaseSchema,
+  setNotionApiKey, setNotionApiKeySchema,
 } from './tools/notion-ingest.js';
-import { ingestContentSchema, ingestContent, ingestContentOutputSchema } from './tools/ingest.js';
-import { bulkIngestSchema, bulkIngest, bulkIngestOutputSchema } from './tools/bulk-ingest.js';
-import { relatedSchema, getRelated, getRelatedOutputSchema } from './tools/related.js';
-import { searchBySourceSchema, searchBySource, searchBySourceOutputSchema } from './tools/search-by-source.js';
-import { tagItemSchema, tagItem, tagItemOutputSchema } from './tools/tag-item.js';
-import { resurfaceSchema, randomResuface, randomResurfaceOutputSchema } from './tools/resurface.js';
-import { searchByDateSchema, searchByDate, searchByDateOutputSchema } from './tools/search-by-date.js';
-import { recentConversationsSchema, getRecentConversations, getRecentConversationsOutputSchema } from './tools/recent-conversations.js';
-import { expertiseProfileSchema, getExpertiseProfileTool, getExpertiseProfileOutputSchema } from './tools/expertise-profile.js';
-import { sessionBriefSchema, getSessionBrief, getSessionBriefOutputSchema } from './tools/session-brief.js';
-import { listBookmarksSchema, listBookmarks, listBookmarksOutputSchema, toggleBookmarkSchema, toggleBookmark, toggleBookmarkOutputSchema } from './tools/bookmarks.js';
-import { searchObsidianSchema, searchObsidian, searchObsidianOutputSchema } from './tools/obsidian-search.js';
-import { chatWithBrainSchema, chatWithBrain, chatWithBrainOutputSchema, listBrainsSchema, listBrains, listBrainsOutputSchema } from './tools/brain-chat.js';
-import { knowledgeGraphSchema, getKnowledgeGraph, getKnowledgeGraphOutputSchema } from './tools/knowledge-graph.js';
-import { knowledgeHealthSchema, knowledgeHealth, knowledgeHealthOutputSchema } from './tools/knowledge-health.js';
-import { knowledgeIndexSchema, getKnowledgeIndex, getKnowledgeIndexOutputSchema } from './tools/knowledge-index.js';
-import { compileKnowledgeSchema, compileKnowledge, compileKnowledgeOutputSchema, getConceptArticlesSchema, getConceptArticles, getConceptArticlesOutputSchema } from './tools/concept-articles.js';
-import { exportCorpusSchema, exportCorpus, exportCorpusOutputSchema } from './tools/export-corpus.js';
+import { ingestContentSchema, ingestContent } from './tools/ingest.js';
+import { bulkIngestSchema, bulkIngest } from './tools/bulk-ingest.js';
+import { relatedSchema, getRelated } from './tools/related.js';
+import { searchBySourceSchema, searchBySource } from './tools/search-by-source.js';
+import { tagItemSchema, tagItem } from './tools/tag-item.js';
+import { resurfaceSchema, randomResuface } from './tools/resurface.js';
+import { searchByDateSchema, searchByDate } from './tools/search-by-date.js';
+import { recentConversationsSchema, getRecentConversations } from './tools/recent-conversations.js';
+import { expertiseProfileSchema, getExpertiseProfileTool } from './tools/expertise-profile.js';
+import { sessionBriefSchema, getSessionBrief } from './tools/session-brief.js';
+import { listBookmarksSchema, listBookmarks, toggleBookmarkSchema, toggleBookmark } from './tools/bookmarks.js';
+import { searchObsidianSchema, searchObsidian } from './tools/obsidian-search.js';
+import { chatWithBrainSchema, chatWithBrain, listBrainsSchema, listBrains } from './tools/brain-chat.js';
+import { knowledgeGraphSchema, getKnowledgeGraph } from './tools/knowledge-graph.js';
+import { knowledgeHealthSchema, knowledgeHealth } from './tools/knowledge-health.js';
+import { knowledgeIndexSchema, getKnowledgeIndex } from './tools/knowledge-index.js';
+import { compileKnowledgeSchema, compileKnowledge, getConceptArticlesSchema, getConceptArticles } from './tools/concept-articles.js';
+import { exportCorpusSchema, exportCorpus } from './tools/export-corpus.js';
 import {
-  tagCooccurrenceSchema, tagCooccurrence, tagCooccurrenceOutputSchema,
-  entityCooccurrenceSchema, entityCooccurrence, entityCooccurrenceOutputSchema,
-  detectGapsSchema, detectGaps, detectGapsOutputSchema,
-  mostRetrievedSchema, mostRetrieved, mostRetrievedOutputSchema,
+  tagCooccurrenceSchema, tagCooccurrence,
+  entityCooccurrenceSchema, entityCooccurrence,
+  detectGapsSchema, detectGaps,
+  mostRetrievedSchema, mostRetrieved,
 } from './tools/analytics.js';
-import { exportClaudeMdSchema, exportClaudeMd, exportClaudeMdOutputSchema } from './tools/claude-md.js';
-import { recomputeSalienceSchema, recomputeSalience, recomputeSalienceOutputSchema } from './tools/salience.js';
-import { deepSearchSchema, deepSearch, deepSearchOutputSchema } from './tools/deep-search.js';
-import { retrievalQualitySchema, retrievalQuality, retrievalQualityOutputSchema } from './tools/retrieval-quality.js';
-import { edgeHistorySchema, getEdgeHistory, getEdgeHistoryOutputSchema } from './tools/edge-history.js';
-import { findPathSchema, findPath, findPathOutputSchema } from './tools/path.js';
-import { computeCentralitySchema, computeCentrality, computeCentralityOutputSchema } from './tools/centrality.js';
+import { exportClaudeMdSchema, exportClaudeMd } from './tools/claude-md.js';
+import { recomputeSalienceSchema, recomputeSalience } from './tools/salience.js';
+import { deepSearchSchema, deepSearch } from './tools/deep-search.js';
+import { retrievalQualitySchema, retrievalQuality } from './tools/retrieval-quality.js';
+import { edgeHistorySchema, getEdgeHistory } from './tools/edge-history.js';
+import { findPathSchema, findPath } from './tools/path.js';
+import { computeCentralitySchema, computeCentrality } from './tools/centrality.js';
 import {
-  securityDashboardSchema, securityDashboard, securityDashboardOutputSchema,
-  acknowledgeAlertSchema, acknowledgeSecurityAlert, acknowledgeSecurityAlertOutputSchema,
-  suppressAlertSchema, suppressAlertType, suppressAlertTypeOutputSchema,
+  securityDashboardSchema, securityDashboard,
+  acknowledgeAlertSchema, acknowledgeSecurityAlert,
+  suppressAlertSchema, suppressAlertType,
 } from './tools/security-admin.js';
 import {
-  firewallStatusSchema, firewallStatus, firewallStatusOutputSchema,
-  firewallPromoteCheckSchema, firewallPromoteCheck, firewallPromoteCheckOutputSchema,
-  firewallUpdateThresholdSchema, firewallUpdateThreshold, firewallUpdateThresholdOutputSchema,
-  firewallRollbackRulesSchema, firewallRollbackRules, firewallRollbackRulesOutputSchema,
-  firewallRuleHistorySchema, firewallRuleHistory, firewallRuleHistoryOutputSchema,
+  firewallStatusSchema, firewallStatus,
+  firewallPromoteCheckSchema, firewallPromoteCheck,
+  firewallUpdateThresholdSchema, firewallUpdateThreshold,
+  firewallRollbackRulesSchema, firewallRollbackRules,
+  firewallRuleHistorySchema, firewallRuleHistory,
 } from './tools/firewall-admin.js';
-import { connectReadwiseSchema, connectReadwise, connectReadwiseOutputSchema, syncReadwiseSchema, syncReadwise, syncReadwiseOutputSchema } from './tools/readwise.js';
-import { withEnvelope, shortCircuitEnvelopeSchema } from './security/tool-envelope.js';
-import type { ShortCircuitStatus } from './security/tool-envelope.js';
+import { connectReadwiseSchema, connectReadwise, syncReadwiseSchema, syncReadwise } from './tools/readwise.js';
 import { requireCredits, requirePaidPlan } from './lib/credits.js';
 import { dbAdmin } from './db/supabase.js';
 import { detectInjection, logInjectionAttempt } from './security/injection.js';
@@ -84,13 +82,6 @@ const __dirname = dirname(__filename);
 const pkg = JSON.parse(
   readFileSync(join(__dirname, '..', 'package.json'), 'utf8'),
 ) as { version: string };
-
-// generate_api_key has no backing src/tools/ file (its handler is inline below),
-// so its output schema is defined here rather than imported.
-const generateApiKeyOutputSchema = z.object({
-  key: z.string(),
-  label: z.string().nullable(),
-});
 
 // Every tool call is scoped to the authenticated user
 export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
@@ -163,22 +154,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   ]);
   void WRITE_TOOLS; // referenced for documentation; may be used by callers via exports later
 
-  /**
-   * The ONLY way secureWrap's cross-cutting short-circuits (role denial,
-   * injection rejection, confirm-required preview) should build their result.
-   * These bypass the tool's own handler, so they can never conform to a
-   * tool-specific outputSchema — every declared outputSchema is unioned with
-   * shortCircuitEnvelopeSchema (see registerTool proxy below) so this shape
-   * always validates. scripts/verify-server-card-parity.ts asserts no other
-   * `return { content: ... }` inside secureWrap bypasses this helper.
-   */
-  function shortCircuitResult(status: ShortCircuitStatus, message: string) {
-    return {
-      content: [{ type: 'text' as const, text: message }],
-      structuredContent: { status, message } as unknown as Record<string, unknown>,
-    };
-  }
-
   /** Human-readable preview for each write-confirm tool. */
   function buildWritePreview(name: string, input: Record<string, unknown>): string {
     switch (name) {
@@ -227,10 +202,12 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       if (!tierGrantsAccess(userRole, requiredTier)) {
         logAccessDenied(auth.userId, toolName, requiredTier, userRole);
         auditLog(auth.userId, toolName, input, false);
-        return shortCircuitResult(
-          'access_denied',
-          `[ACCESS DENIED] Tool \`${toolName}\` requires \`${requiredTier}\` access. Your role: \`${userRole}\`. Please upgrade your BrainTube plan to use this tool.`
-        );
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `[ACCESS DENIED] Tool \`${toolName}\` requires \`${requiredTier}\` access. Your role: \`${userRole}\`. Please upgrade your BrainTube plan to use this tool.`,
+          }],
+        };
       }
 
       // ── 1. Injection detection ──────────────────────────────────────────────
@@ -238,28 +215,32 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
         if (detectInjection(s)) {
           logInjectionAttempt(auth.userId, toolName, s);
           auditLog(auth.userId, toolName, input, false);
-          return shortCircuitResult(
-            'injection_blocked',
-            '[SECURITY] Tool call rejected: suspicious content detected in input parameters. This incident has been logged.'
-          );
+          return {
+            content: [{
+              type: 'text' as const,
+              text: '[SECURITY] Tool call rejected: suspicious content detected in input parameters. This incident has been logged.',
+            }],
+          };
         }
       }
 
       // ── 2. Write confirmation for destructive tools ─────────────────────────
       if (CONFIRM_REQUIRED.has(toolName) && !input.confirm) {
         const preview = buildWritePreview(toolName, input);
-        return shortCircuitResult(
-          'confirmation_required',
-          [
-            `⚠️ **Confirmation required** — \`${toolName}\` is a destructive write operation.`,
-            '',
-            '**What will happen:**',
-            preview,
-            '',
-            `To proceed: call \`${toolName}\` again with **\`confirm: true\`**.`,
-            'To cancel: do nothing.',
-          ].join('\n')
-        );
+        return {
+          content: [{
+            type: 'text' as const,
+            text: [
+              `⚠️ **Confirmation required** — \`${toolName}\` is a destructive write operation.`,
+              '',
+              '**What will happen:**',
+              preview,
+              '',
+              `To proceed: call \`${toolName}\` again with **\`confirm: true\`**.`,
+              'To cancel: do nothing.',
+            ].join('\n'),
+          }],
+        };
       }
 
       // ── 3. Execute + fire-and-forget audit log ──────────────────────────────
@@ -370,16 +351,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       };
     }
 
-    // ── Union outputSchema with the short-circuit envelope ───────────────────
-    // secureWrap's cross-cutting short-circuits (role denial, injection reject,
-    // confirm-required preview) return { status, message } — never a
-    // tool-specific shape — so every declared outputSchema must accept that
-    // envelope too, or the MCP SDK's mandatory structuredContent validation
-    // rejects those paths once outputSchema is present.
-    if (def?.outputSchema) {
-      securedDef = { ...securedDef, outputSchema: withEnvelope(def.outputSchema) };
-    }
-
     // Track for startup audit
     registeredToolMeta.push({ name, description: securedDef.description ?? '' });
 
@@ -394,7 +365,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Full-text search over your personal BrainTube knowledge corpus. Searches across YouTube, Instagram, web, LinkedIn, GitHub, Twitter and more. Returns results ranked by recency with taint warnings.',
       inputSchema: searchSchema,
-      outputSchema: searchKnowledgeOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     async (input) => {
@@ -409,7 +379,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Get full details for a specific saved item including transcript, description, summary, key takeaways and taint level. Pass YouTube video ID or internal UUID.',
       inputSchema: videoSchema,
-      outputSchema: getVideoOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => getVideo(input, auth.userId)
@@ -420,7 +389,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'List your most recently saved items across all source types. Use to resume a research session or review what was captured lately.',
       inputSchema: recentSchema,
-      outputSchema: listRecentOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => listRecent(input, auth.userId)
@@ -431,7 +399,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Get your personal corpus statistics: total items saved, breakdown by source type (youtube/instagram/web/etc), taint distribution. Call this before searching to understand what knowledge is available.',
       inputSchema: statsSchema,
-      outputSchema: getStatsOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => getStats(input, auth.userId)
@@ -444,7 +411,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Find items semantically similar to a given item using vector similarity. Useful for discovering related concepts, follow-up research, or building knowledge clusters. Requires embeddings — run backfill_embeddings first if results are empty.',
       inputSchema: relatedSchema,
-      outputSchema: getRelatedOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => getRelated(input, auth.userId)
@@ -455,7 +421,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Search your corpus filtered to a specific source type. Use when you want results only from "youtube", "instagram", "web", "notion", "linkedin", "twitter", "github", "reddit", "pdf", "note", etc. Combines semantic + keyword fallback.',
       inputSchema: searchBySourceSchema,
-      outputSchema: searchBySourceOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     async (input) => {
@@ -470,7 +435,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Semantic search scoped to items saved between two dates. Pass ISO 8601 dates for "after" and "before". Useful for reviewing what you captured during a specific period or project.',
       inputSchema: searchByDateSchema,
-      outputSchema: searchByDateOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     async (input) => {
@@ -485,7 +449,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Add or remove tags on a saved item. Tags are stored as a text array on the item. Provide add[] and/or remove[] arrays. Tags are normalized to lowercase.',
       inputSchema: tagItemSchema,
-      outputSchema: tagItemOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
     },
     (input) => tagItem(input, auth.userId)
@@ -496,7 +459,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'List saved bookmarks from your corpus. Filter by read/unread status. Returns title, URL, tags, and read state sorted by bookmarked_at desc.',
       inputSchema: listBookmarksSchema,
-      outputSchema: listBookmarksOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => listBookmarks(input, auth.userId)
@@ -507,7 +469,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Bookmark an item, remove a bookmark, or toggle its read/unread state. Actions: bookmark | unbookmark | mark_read | mark_unread.',
       inputSchema: toggleBookmarkSchema,
-      outputSchema: toggleBookmarkOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
     },
     (input) => toggleBookmark(input, auth.userId)
@@ -520,7 +481,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Connect your Readwise account to BrainTube by saving your Readwise API token. Required before sync_readwise can run. Get your token at readwise.io/access_token.',
       inputSchema: connectReadwiseSchema,
-      outputSchema: connectReadwiseOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
     (input) => connectReadwise(input, auth.rawToken ?? '')
@@ -531,7 +491,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Import highlights from your Readwise library into your BrainTube corpus. Use mode=incremental (default) to fetch only new highlights, or mode=full to re-import everything. Requires connect_readwise first.',
       inputSchema: syncReadwiseSchema,
-      outputSchema: syncReadwiseOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: false }
     },
     (input) => syncReadwise(input, auth.rawToken ?? '')
@@ -544,7 +503,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Ingest a single Notion page into your BrainTube corpus. Accepts a full Notion URL or raw page UUID. Extracts title + body text, upserts to items table, and immediately generates an embedding. Requires set_notion_api_key first.',
       inputSchema: ingestNotionPageSchema,
-      outputSchema: ingestNotionPageOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
     async (input) => {
@@ -564,7 +522,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Write a note or AI-generated synthesis back to a specific item in your corpus. No write_token needed — your JWT proves ownership. Ownership is verified server-side.',
       inputSchema: noteSchema,
-      outputSchema: addNoteOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
     },
     (input) => addNote(input, auth.userId)
@@ -577,7 +534,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Retrieve your most recently saved Claude and ChatGPT conversations. Useful for resuming context from a previous session or reviewing past AI-assisted work.',
       inputSchema: recentConversationsSchema,
-      outputSchema: getRecentConversationsOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => getRecentConversations(input, auth.userId)
@@ -588,7 +544,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Analyse your corpus to build a knowledge expertise profile. Tags are classified as expert (>50 items), intermediate (20-50), surface (5-20), or blind spots (<5). Also returns dominant source types and recent 7-day focus.',
       inputSchema: expertiseProfileSchema,
-      outputSchema: getExpertiseProfileOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     async (input) => {
@@ -603,7 +558,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'One-shot session bootstrap: combines expertise profile, last 5 AI conversations, and corpus stats into a single JSON object. Call this at the start of a session to load full context without multiple round-trips.',
       inputSchema: sessionBriefSchema,
-      outputSchema: getSessionBriefOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     async (input) => {
@@ -620,7 +574,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Ingest a single piece of content (note, article, document, etc.) into your BrainTube corpus. Deduplicates by source_url first, then by exact title match. Immediately generates an embedding. Use force_new=true to skip dedup and always insert.',
       inputSchema: ingestContentSchema,
-      outputSchema: ingestContentOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
     async (input) => {
@@ -640,7 +593,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Ingest up to 50 items in a single call. Each item is deduplicated (source_url → title fallback), inserted or updated, then embedded in batches of 20. Daily limit: 500 new items per user. Returns { inserted, updated, skipped, errors[] }.',
       inputSchema: bulkIngestSchema,
-      outputSchema: bulkIngestOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
     async (input) => {
@@ -658,7 +610,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Surface forgotten items from your corpus using weighted randomness — items you\'ve retrieved least often are most likely to appear. Great for spaced repetition and rediscovering old saves.',
       inputSchema: resurfaceSchema,
-      outputSchema: randomResurfaceOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => randomResuface(input, auth.userId)
@@ -669,7 +620,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Ingest all pages from a Notion database into your BrainTube corpus. Processes up to `limit` pages with 350ms delay between each. Requires set_notion_api_key first.',
       inputSchema: ingestNotionDatabaseSchema,
-      outputSchema: ingestNotionDatabaseOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
     async (input) => {
@@ -691,7 +641,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Save your Notion integration API key so ingest_notion_page and ingest_notion_database can access your Notion workspace. Get your key from https://www.notion.so/my-integrations.',
       inputSchema: setNotionApiKeySchema,
-      outputSchema: setNotionApiKeyOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
     async (input) => {
@@ -700,8 +649,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
         content: [{
           type: 'text' as const,
           text: 'Notion API key saved. You can now use ingest_notion_page and ingest_notion_database.'
-        }],
-        structuredContent: { saved: true } as unknown as Record<string, unknown>
+        }]
       };
     }
   );
@@ -711,7 +659,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Generate and store vector embeddings for all your items that are missing them. Required before semantic search works. Processes in batches of 20 with 200ms delays. Returns { embedded, errors } count.',
       inputSchema: z.object({}),
-      outputSchema: backfillEmbeddingsOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
     async () => {
@@ -734,7 +681,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       inputSchema: z.object({
         label: z.string().optional().describe('Human-readable label (e.g. "Obsidian MacBook")')
       }),
-      outputSchema: generateApiKeyOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: false }
     },
     async (input) => {
@@ -766,7 +712,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Search your local Obsidian vault via the Obsidian Local REST API plugin (exposed through Tailscale). Returns matching notes with title, file path, and a text excerpt. Requires OBSIDIAN_BRIDGE_URL and OBSIDIAN_API_KEY set in Railway env vars.',
       inputSchema: searchObsidianSchema,
-      outputSchema: searchObsidianOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => searchObsidian(input)
@@ -779,7 +724,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Ask a question to a public BrainTube Brain (a curated knowledge base built from someone\'s corpus). Pass the brain_slug (visible in the Brain\'s URL), your question, and optionally prior chat_history for multi-turn conversations. Returns answer + source citations.',
       inputSchema: chatWithBrainSchema,
-      outputSchema: chatWithBrainOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: true }
     },
     async (input) => {
@@ -794,7 +738,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'List all Brains you have created. Returns slug, name, description, item count, tier (free/pro), and visibility (public/private). Use the slug with chat_with_brain to query a specific Brain.',
       inputSchema: listBrainsSchema,
-      outputSchema: listBrainsOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => listBrains(input, auth.userId)
@@ -807,7 +750,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Build a knowledge graph around a specific item, showing how it connects to other items in your corpus via knowledge_edges. Returns the center item, connected nodes with metadata, and typed edges with confidence scores. Use depth=1 for direct connections, depth=2-3 for wider neighbourhood exploration.',
       inputSchema: knowledgeGraphSchema,
-      outputSchema: getKnowledgeGraphOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => getKnowledgeGraph(input, auth.userId)
@@ -818,7 +760,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Run a health check on your knowledge corpus. Returns total items, missing embeddings, missing enrichment, missing tags, orphan items, stale items (90d+), contradictions, overdue reviews, topic gaps, and an overall health score out of 100.',
       inputSchema: knowledgeHealthSchema,
-      outputSchema: knowledgeHealthOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => knowledgeHealth(input, auth.userId)
@@ -829,7 +770,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Get a topic-level index of your entire knowledge corpus. Groups items by primary topic and returns item count, synthesis count, average salience, latest save date, and source types per topic — sorted by item count descending. Use to understand which subjects dominate your library.',
       inputSchema: knowledgeIndexSchema,
-      outputSchema: getKnowledgeIndexOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => getKnowledgeIndex(input, auth.userId)
@@ -840,7 +780,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Export your entire BrainTube knowledge corpus as a ZIP file. Items are exported as Markdown with YAML frontmatter, concept articles go into a wiki/ folder, and an index.md is included. Returns a signed download URL valid for 1 hour.',
       inputSchema: exportCorpusSchema,
-      outputSchema: exportCorpusOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => exportCorpus(input, auth.rawToken)
@@ -851,7 +790,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Invoke the compile-knowledge edge function to generate concept articles from a topic cluster or Brain. Synthesises saved items into structured wiki-style articles with backlinks and knowledge graph edges. Pass either cluster_id or brain_id.',
       inputSchema: compileKnowledgeSchema,
-      outputSchema: compileKnowledgeOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
     async (input) => {
@@ -866,7 +804,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Query compiled concept articles from your knowledge base. Filter by cluster_id, brain_id, or free-text search against title and body. Returns title, slug, word count, and backlink count per article.',
       inputSchema: getConceptArticlesSchema,
-      outputSchema: getConceptArticlesOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => getConceptArticles(input, auth.userId)
@@ -879,7 +816,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Find tags that frequently appear together across your corpus. Returns pairs sorted by co-occurrence count — useful for discovering implicit topic clusters and knowledge relationships.',
       inputSchema: tagCooccurrenceSchema,
-      outputSchema: tagCooccurrenceOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => tagCooccurrence(input, auth.userId)
@@ -890,7 +826,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Find named entities (people, orgs, tools) that frequently co-appear across your corpus. Returns pairs sorted by co-occurrence count — useful for mapping who/what clusters in your knowledge base.',
       inputSchema: entityCooccurrenceSchema,
-      outputSchema: entityCooccurrenceOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => entityCooccurrence(input, auth.userId)
@@ -901,7 +836,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Detect knowledge gaps in your corpus: thin topics (few items), entities without depth, stale high-value items, topics missing concept articles, and unconnected items with no knowledge edges.',
       inputSchema: detectGapsSchema,
-      outputSchema: detectGapsOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => detectGaps(input, auth.userId)
@@ -912,7 +846,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Return the items you retrieve most often, ranked by retrieval_count. Surfaces your highest-utility knowledge — the items you keep coming back to.',
       inputSchema: mostRetrievedSchema,
-      outputSchema: mostRetrievedOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => mostRetrieved(input, auth.userId)
@@ -925,7 +858,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Generate a CLAUDE.md-compatible knowledge context file for any Claude Code project. Pulls your top-salience items, compiled concept articles, key topics, and top entities into a structured Markdown block you can drop into any repo.',
       inputSchema: exportClaudeMdSchema,
-      outputSchema: exportClaudeMdOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => exportClaudeMd(input, auth.userId)
@@ -936,7 +868,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Trigger a salience score recompute across your corpus via the compute_salience_scores RPC. Use this after bulk ingests or to refresh rankings. Returns { updated_count }.',
       inputSchema: recomputeSalienceSchema,
-      outputSchema: recomputeSalienceOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
     (input) => recomputeSalience(input, auth.userId)
@@ -947,7 +878,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Multi-hop knowledge search: runs adaptive_search then traverses the knowledge graph from the top-3 results up to max_hops deep, surfacing semantically connected items that a flat search would miss. Returns direct_results + graph_connected + total_nodes_explored.',
       inputSchema: deepSearchSchema,
-      outputSchema: deepSearchOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     async (input) => {
@@ -962,7 +892,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Get a retrieval quality dashboard for your corpus over the past N days. Covers search hit rates, zero-result queries, top search terms, and result relevance signals.',
       inputSchema: retrievalQualitySchema,
-      outputSchema: retrievalQualityOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => retrievalQuality(input, auth.userId)
@@ -973,7 +902,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Find the shortest path between two items in your knowledge graph. Traverses knowledge_edges up to max_depth hops and returns the ordered list of item IDs and edge types along the path, or "no path found" if disconnected.',
       inputSchema: findPathSchema,
-      outputSchema: findPathOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => findPath(input)
@@ -984,7 +912,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Trigger an on-demand recompute of graph centrality scores across your corpus via compute_centrality_scores RPC. Run after adding new knowledge edges or after compile_knowledge. Returns { updated_count }.',
       inputSchema: computeCentralitySchema,
-      outputSchema: computeCentralityOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
     (input) => computeCentrality(input, auth.userId)
@@ -995,7 +922,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Get the temporal history of knowledge edges between two specific items — when they were connected, edge types over time, confidence changes. Pass item_a and item_b as UUIDs.',
       inputSchema: edgeHistorySchema,
-      outputSchema: getEdgeHistoryOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => getEdgeHistory(input)
@@ -1008,7 +934,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Get current security alert status: unacknowledged alerts, recent security events (24h), taint distribution, active canary triggers, active alert suppressions, and 7-day retrieval quality metrics. Admin only.',
       inputSchema: securityDashboardSchema,
-      outputSchema: securityDashboardOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (_input) => securityDashboard(_input)
@@ -1019,7 +944,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Acknowledge a security alert by UUID, marking it as resolved. Optionally attach resolution notes. Admin only.',
       inputSchema: acknowledgeAlertSchema,
-      outputSchema: acknowledgeSecurityAlertOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
     },
     (input) => acknowledgeSecurityAlert(input)
@@ -1030,7 +954,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Temporarily suppress a specific alert type for maintenance windows. Duration 1–168 hours (max 7 days). Requires a reason. Admin only.',
       inputSchema: suppressAlertSchema,
-      outputSchema: suppressAlertTypeOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
     (input) => suppressAlertType(input)
@@ -1043,7 +966,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Get LLM firewall status — analytics (7d), shadow mode state, active rule versions, and adaptive threshold recommendations (30d). Admin only.',
       inputSchema: firewallStatusSchema,
-      outputSchema: firewallStatusOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (_input) => firewallStatus(_input)
@@ -1054,7 +976,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Promote a firewall check from shadow mode to enforcement (will block/modify), or demote back to shadow (log only). Available checks: toxicity, topic_boundary, conversation_risk, token_budget, ingress_probe, exfiltration, policy_compliance. Admin only.',
       inputSchema: firewallPromoteCheckSchema,
-      outputSchema: firewallPromoteCheckOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
     (input) => firewallPromoteCheck(input)
@@ -1065,7 +986,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Update a firewall threshold value with automatic versioning. Thresholds: conversation_risk_warn, conversation_risk_block, grounding_minimum, grounding_writeback_gate, exfiltration_entity_limit, exfiltration_yesno_ratio. Admin only.',
       inputSchema: firewallUpdateThresholdSchema,
-      outputSchema: firewallUpdateThresholdOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
     },
     (input) => firewallUpdateThreshold(input)
@@ -1076,7 +996,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'Rollback firewall rules (thresholds, shadow_config, etc.) to a previous version. List available versions first with firewall_rule_history. Admin only.',
       inputSchema: firewallRollbackRulesSchema,
-      outputSchema: firewallRollbackRulesOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false }
     },
     (input) => firewallRollbackRules(input)
@@ -1087,7 +1006,6 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     {
       description: 'View version history for a firewall rule type (thresholds, shadow_config, injection_patterns, pii_patterns, toxicity_patterns, homoglyph_map, token_limits). Shows version number, description, changed_by, and active status. Admin only.',
       inputSchema: firewallRuleHistorySchema,
-      outputSchema: firewallRuleHistoryOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => firewallRuleHistory(input)

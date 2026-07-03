@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { dbAdmin, semanticSearchRpc, incrementRetrievalStats } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
-import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 
 export const searchBySourceSchema = z.object({
   source_type: z.string().min(1).describe(
@@ -11,8 +10,6 @@ export const searchBySourceSchema = z.object({
   query: z.string().min(1).max(500).describe('Natural language search query'),
   limit: z.number().int().min(1).max(20).default(10).describe('Number of results to return (default 10)')
 });
-
-export const searchBySourceOutputSchema = taintedListSchema(looseItemSchema);
 
 export async function searchBySource(input: z.infer<typeof searchBySourceSchema>, userId: string) {
   const { source_type, query, limit } = input;
@@ -67,8 +64,7 @@ export async function searchBySource(input: z.infer<typeof searchBySourceSchema>
       content: [{
         type: 'text' as const,
         text: `No results found for "${query}" in source_type "${source_type}". Try get_stats to see which source types have content.`
-      }],
-      structuredContent: { data: [], taint_level: 0 } as unknown as Record<string, unknown>
+      }]
     };
   }
 

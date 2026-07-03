@@ -7,18 +7,12 @@ export const noteSchema = z.object({
   // write_token REMOVED — JWT ownership check in db layer replaces it
 });
 
-export const addNoteOutputSchema = z.object({
-  item_id: z.string(),
-  note_length: z.number(),
-});
-
 export async function addNote(input: z.infer<typeof noteSchema>, userId: string) {
   await writeNote(input.video_id, input.note, userId);
   return {
     content: [{
       type: 'text' as const,
       text: `Note saved to item ${input.video_id}. Length: ${input.note.length} chars.`
-    }],
-    structuredContent: { item_id: input.video_id, note_length: input.note.length } as unknown as Record<string, unknown>
+    }]
   };
 }

@@ -3,15 +3,6 @@ import { dbAdmin } from '../db/supabase.js';
 
 export const expertiseProfileSchema = z.object({});
 
-export const getExpertiseProfileOutputSchema = z.object({
-  expert_topics: z.array(z.string()),
-  intermediate_topics: z.array(z.string()),
-  surface_topics: z.array(z.string()),
-  blind_spots: z.array(z.string()),
-  dominant_sources: z.array(z.object({ source: z.string(), count: z.number() })),
-  recent_focus: z.array(z.string()),
-});
-
 export interface ExpertiseProfile {
   expert_topics: string[];
   intermediate_topics: string[];

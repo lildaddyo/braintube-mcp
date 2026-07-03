@@ -5,23 +5,6 @@ import { dbAdmin } from '../db/supabase.js';
 
 export const securityDashboardSchema = z.object({});
 
-export const securityDashboardOutputSchema = z.object({
-  unacknowledged_alerts: z.array(z.unknown()),
-  recent_security_events_24h: z.array(z.unknown()),
-  taint_distribution: z.array(z.unknown()),
-  active_canary_triggers: z.array(z.unknown()),
-  active_suppressions: z.array(z.unknown()),
-  retrieval_quality_7d: z.object({
-    sample_count: z.number().optional(),
-    avg_precision: z.number().nullable().optional(),
-  }).passthrough(),
-  firewall_summary: z.object({
-    analytics_7d: z.unknown().optional(),
-    active_rule_versions: z.array(z.unknown()).optional(),
-  }).passthrough(),
-  checked_at: z.string(),
-});
-
 export async function securityDashboard(
   _input: z.infer<typeof securityDashboardSchema>
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
@@ -109,16 +92,9 @@ export const acknowledgeAlertSchema = z.object({
   notes:    z.string().optional().describe('Resolution notes'),
 });
 
-export const acknowledgeSecurityAlertOutputSchema = z.object({
-  success: z.boolean(),
-  alert_id: z.string().optional(),
-  notes: z.string().optional(),
-  error: z.string().optional(),
-});
-
 export async function acknowledgeSecurityAlert(
   input: z.infer<typeof acknowledgeAlertSchema>
-): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
+): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const { alert_id, notes } = input;
 
   const { error } = await dbAdmin.rpc('acknowledge_alert', {
@@ -126,19 +102,11 @@ export async function acknowledgeSecurityAlert(
     p_notes:    notes ?? null,
   });
 
-  if (error) {
-    return {
-      content: [{ type: 'text' as const, text: `Error: ${error.message}` }],
-      structuredContent: { success: false, error: error.message } as unknown as Record<string, unknown>,
-    };
-  }
+  const text = error
+    ? `Error: ${error.message}`
+    : `Alert ${alert_id} acknowledged.${notes ? ` Notes: ${notes}` : ''}`;
 
-  const text = `Alert ${alert_id} acknowledged.${notes ? ` Notes: ${notes}` : ''}`;
-
-  return {
-    content: [{ type: 'text' as const, text }],
-    structuredContent: { success: true, alert_id, ...(notes ? { notes } : {}) } as unknown as Record<string, unknown>,
-  };
+  return { content: [{ type: 'text' as const, text }] };
 }
 
 // ── suppress_alert_type ───────────────────────────────────────────────────────
@@ -149,17 +117,9 @@ export const suppressAlertSchema = z.object({
   reason:         z.string().min(1).describe('Reason for suppression'),
 });
 
-export const suppressAlertTypeOutputSchema = z.object({
-  success: z.boolean(),
-  alert_type: z.string().optional(),
-  suppressed_until: z.string().optional(),
-  reason: z.string().optional(),
-  error: z.string().optional(),
-});
-
 export async function suppressAlertType(
   input: z.infer<typeof suppressAlertSchema>
-): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
+): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const { alert_type, duration_hours, reason } = input;
 
   const suppressed_until = new Date(Date.now() + duration_hours * 60 * 60 * 1000).toISOString();
@@ -168,17 +128,9 @@ export async function suppressAlertType(
     .from('alert_suppressions')
     .insert({ alert_type, reason, suppressed_until });
 
-  if (error) {
-    return {
-      content: [{ type: 'text' as const, text: `Error: ${error.message}` }],
-      structuredContent: { success: false, error: error.message } as unknown as Record<string, unknown>,
-    };
-  }
+  const text = error
+    ? `Error: ${error.message}`
+    : `Alert type "${alert_type}" suppressed for ${duration_hours}h until ${suppressed_until}. Reason: ${reason}`;
 
-  const text = `Alert type "${alert_type}" suppressed for ${duration_hours}h until ${suppressed_until}. Reason: ${reason}`;
-
-  return {
-    content: [{ type: 'text' as const, text }],
-    structuredContent: { success: true, alert_type, suppressed_until, reason } as unknown as Record<string, unknown>,
-  };
+  return { content: [{ type: 'text' as const, text }] };
 }

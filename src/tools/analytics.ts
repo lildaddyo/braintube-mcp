@@ -5,16 +5,6 @@ import { dbAdmin } from '../db/supabase.js';
 
 export const tagCooccurrenceSchema = z.object({});
 
-export const tagCooccurrenceOutputSchema = z.object({
-  pairs: z.array(z.object({
-    tag_a: z.string(),
-    tag_b: z.string(),
-    cooccurrence_count: z.number().optional(),
-    items_with_a: z.number().optional(),
-    items_with_b: z.number().optional(),
-  }).passthrough()),
-});
-
 export async function tagCooccurrence(_input: z.infer<typeof tagCooccurrenceSchema>, userId: string) {
   const { data, error } = await dbAdmin.rpc('tag_cooccurrence', {
     for_user_id: userId,
@@ -43,16 +33,6 @@ export async function tagCooccurrence(_input: z.infer<typeof tagCooccurrenceSche
 // ── entity_cooccurrence ───────────────────────────────────────────────────────
 
 export const entityCooccurrenceSchema = z.object({});
-
-export const entityCooccurrenceOutputSchema = z.object({
-  pairs: z.array(z.object({
-    entity_a: z.string(),
-    entity_b: z.string(),
-    cooccurrence_count: z.number().optional(),
-    items_with_a: z.number().optional(),
-    items_with_b: z.number().optional(),
-  }).passthrough()),
-});
 
 export async function entityCooccurrence(_input: z.infer<typeof entityCooccurrenceSchema>, userId: string) {
   const { data, error } = await dbAdmin.rpc('entity_cooccurrence', {
@@ -83,14 +63,6 @@ export async function entityCooccurrence(_input: z.infer<typeof entityCooccurren
 
 export const detectGapsSchema = z.object({});
 
-export const detectGapsOutputSchema = z.object({
-  thin_topics: z.array(z.unknown()).optional(),
-  entities_without_depth: z.array(z.unknown()).optional(),
-  stale_high_value: z.array(z.unknown()).optional(),
-  missing_concept_articles: z.array(z.unknown()).optional(),
-  unconnected_items: z.array(z.unknown()).optional(),
-}).passthrough();
-
 export async function detectGaps(_input: z.infer<typeof detectGapsSchema>, userId: string) {
   const { data, error } = await dbAdmin.rpc('detect_knowledge_gaps', { for_user_id: userId });
   if (error) throw new Error(`detect_knowledge_gaps RPC failed: ${error.message}`);
@@ -103,10 +75,7 @@ export async function detectGaps(_input: z.infer<typeof detectGapsSchema>, userI
     unconnected_items?: unknown[];
   } | null;
 
-  if (!d) return {
-    content: [{ type: 'text' as const, text: 'No gap data returned.' }],
-    structuredContent: {} as unknown as Record<string, unknown>,
-  };
+  if (!d) return { content: [{ type: 'text' as const, text: 'No gap data returned.' }] };
 
   const lines = [
     'Knowledge Gaps:',
@@ -132,15 +101,6 @@ export const mostRetrievedSchema = z.object({
   ),
 });
 
-export const mostRetrievedOutputSchema = z.object({
-  items: z.array(z.object({
-    item_id: z.string(),
-    title: z.string().optional(),
-    retrieval_count: z.number().optional(),
-    last_retrieved: z.string().nullable().optional(),
-  }).passthrough()),
-});
-
 export async function mostRetrieved(input: z.infer<typeof mostRetrievedSchema>, userId: string) {
   const { data, error } = await dbAdmin.rpc('most_retrieved_items', {
     for_user_id: userId,
@@ -154,10 +114,7 @@ export async function mostRetrieved(input: z.infer<typeof mostRetrievedSchema>, 
   }>;
 
   if (rows.length === 0) {
-    return {
-      content: [{ type: 'text' as const, text: 'No retrieval data yet.' }],
-      structuredContent: { items: [] } as unknown as Record<string, unknown>,
-    };
+    return { content: [{ type: 'text' as const, text: 'No retrieval data yet.' }] };
   }
 
   const lines = [

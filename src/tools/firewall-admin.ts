@@ -5,17 +5,9 @@ import { dbAdmin } from '../db/supabase.js';
 
 export const firewallStatusSchema = z.object({});
 
-export const firewallStatusOutputSchema = z.object({
-  analytics_7d: z.unknown().optional(),
-  active_rule_versions: z.array(z.unknown()).optional(),
-  threshold_analysis_30d: z.unknown().optional(),
-  recent_firewall_events_24h: z.array(z.unknown()).optional(),
-  checked_at: z.string().optional(),
-}).passthrough();
-
 export async function firewallStatus(
   _input: z.infer<typeof firewallStatusSchema>
-): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
+): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
 
   // Firewall analytics (7-day)
   const { data: analytics } = await dbAdmin.rpc('get_firewall_analytics', { p_days: 7 });
@@ -50,7 +42,6 @@ export async function firewallStatus(
 
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }],
-    structuredContent: payload as unknown as Record<string, unknown>,
   };
 }
 
@@ -65,17 +56,9 @@ export const firewallPromoteCheckSchema = z.object({
   ),
 });
 
-export const firewallPromoteCheckOutputSchema = z.object({
-  check_name: z.string().optional(),
-  action: z.enum(['promote', 'demote']).optional(),
-  shadow_checks: z.array(z.string()).optional(),
-  rule_version: z.number().optional(),
-  error: z.string().optional(),
-}).passthrough();
-
 export async function firewallPromoteCheck(
   input: z.infer<typeof firewallPromoteCheckSchema>
-): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
+): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const { check_name, action } = input;
 
   // Get current shadow config snapshot
@@ -84,10 +67,7 @@ export async function firewallPromoteCheck(
   });
 
   if (!currentConfig) {
-    return {
-      content: [{ type: 'text' as const, text: 'Error: No active shadow_config found.' }],
-      structuredContent: { error: 'No active shadow_config found.' } as unknown as Record<string, unknown>,
-    };
+    return { content: [{ type: 'text' as const, text: 'Error: No active shadow_config found.' }] };
   }
 
   // RPC returns the rules_snapshot jsonb — may arrive as object or string
@@ -111,10 +91,7 @@ export async function firewallPromoteCheck(
   });
 
   if (error) {
-    return {
-      content: [{ type: 'text' as const, text: `Error snapshotting config: ${error.message}` }],
-      structuredContent: { error: error.message } as unknown as Record<string, unknown>,
-    };
+    return { content: [{ type: 'text' as const, text: `Error snapshotting config: ${error.message}` }] };
   }
 
   const shadowList = checks.length > 0 ? checks.join(', ') : 'none (all enforcing)';
@@ -122,15 +99,7 @@ export async function firewallPromoteCheck(
     ? `✅ Promoted "${check_name}" — now enforcing (will block/modify).\nShadow checks remaining: ${shadowList}\nRule version: ${versionId}`
     : `⬇️ Demoted "${check_name}" — now shadow mode (log only).\nShadow checks: ${shadowList}\nRule version: ${versionId}`;
 
-  return {
-    content: [{ type: 'text' as const, text }],
-    structuredContent: {
-      check_name,
-      action,
-      shadow_checks: checks,
-      rule_version: versionId,
-    } as unknown as Record<string, unknown>,
-  };
+  return { content: [{ type: 'text' as const, text }] };
 }
 
 // ── firewall_update_threshold ──────────────────────────────────────────────────
@@ -143,18 +112,9 @@ export const firewallUpdateThresholdSchema = z.object({
   reason:    z.string().min(1).describe('Why this threshold is being changed'),
 });
 
-export const firewallUpdateThresholdOutputSchema = z.object({
-  threshold_name: z.string().optional(),
-  old_value: z.unknown().optional(),
-  new_value: z.number().optional(),
-  rule_version: z.number().optional(),
-  reason: z.string().optional(),
-  error: z.string().optional(),
-}).passthrough();
-
 export async function firewallUpdateThreshold(
   input: z.infer<typeof firewallUpdateThresholdSchema>
-): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
+): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const { threshold_name, new_value, reason } = input;
 
   // Get current thresholds snapshot
@@ -163,10 +123,7 @@ export async function firewallUpdateThreshold(
   });
 
   if (!currentThresholds) {
-    return {
-      content: [{ type: 'text' as const, text: 'Error: No active thresholds found.' }],
-      structuredContent: { error: 'No active thresholds found.' } as unknown as Record<string, unknown>,
-    };
+    return { content: [{ type: 'text' as const, text: 'Error: No active thresholds found.' }] };
   }
 
   const thresholds = typeof currentThresholds === 'string'
@@ -184,10 +141,7 @@ export async function firewallUpdateThreshold(
   });
 
   if (error) {
-    return {
-      content: [{ type: 'text' as const, text: `Error snapshotting thresholds: ${error.message}` }],
-      structuredContent: { error: error.message } as unknown as Record<string, unknown>,
-    };
+    return { content: [{ type: 'text' as const, text: `Error snapshotting thresholds: ${error.message}` }] };
   }
 
   return {
@@ -195,13 +149,6 @@ export async function firewallUpdateThreshold(
       type: 'text' as const,
       text: `Updated "${threshold_name}": ${oldValue} → ${new_value}\nReason: ${reason}\nRule version: ${versionId}\n\nTo rollback: use firewall_rollback_rules with rule_type "thresholds"`,
     }],
-    structuredContent: {
-      threshold_name,
-      old_value: oldValue,
-      new_value,
-      rule_version: versionId,
-      reason,
-    } as unknown as Record<string, unknown>,
   };
 }
 
@@ -214,17 +161,9 @@ export const firewallRollbackRulesSchema = z.object({
   to_version: z.number().int().positive().describe('Version number to rollback to'),
 });
 
-export const firewallRollbackRulesOutputSchema = z.object({
-  success: z.boolean().optional(),
-  rule_type: z.string().optional(),
-  to_version: z.number().optional(),
-  rolled_back_from: z.string().optional(),
-  error: z.string().optional(),
-}).passthrough();
-
 export async function firewallRollbackRules(
   input: z.infer<typeof firewallRollbackRulesSchema>
-): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
+): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const { rule_type, to_version } = input;
 
   // Verify target version exists before rolling back
@@ -241,9 +180,6 @@ export async function firewallRollbackRules(
         type: 'text' as const,
         text: `Error: Version ${to_version} not found for rule type "${rule_type}".`,
       }],
-      structuredContent: {
-        error: `Version ${to_version} not found for rule type "${rule_type}".`,
-      } as unknown as Record<string, unknown>,
     };
   }
 
@@ -253,30 +189,14 @@ export async function firewallRollbackRules(
   });
 
   if (rollbackError) {
-    return {
-      content: [{ type: 'text' as const, text: `Rollback error: ${rollbackError.message}` }],
-      structuredContent: { error: rollbackError.message } as unknown as Record<string, unknown>,
-    };
+    return { content: [{ type: 'text' as const, text: `Rollback error: ${rollbackError.message}` }] };
   }
 
   const text = success
     ? `✅ Rolled back "${rule_type}" to version ${to_version} (from ${targetVersion.created_at}).\nOriginal description: ${targetVersion.change_description || 'none'}`
     : `Error: Rollback failed for "${rule_type}" version ${to_version}.`;
 
-  return {
-    content: [{ type: 'text' as const, text }],
-    structuredContent: (success
-      ? {
-          success: true,
-          rule_type,
-          to_version,
-          rolled_back_from: targetVersion.created_at,
-        }
-      : {
-          success: false,
-          error: `Rollback failed for "${rule_type}" version ${to_version}.`,
-        }) as unknown as Record<string, unknown>,
-  };
+  return { content: [{ type: 'text' as const, text }] };
 }
 
 // ── firewall_rule_history ──────────────────────────────────────────────────────
@@ -287,23 +207,9 @@ export const firewallRuleHistorySchema = z.object({
   ),
 });
 
-export const firewallRuleHistoryOutputSchema = z.object({
-  rule_type: z.string().optional(),
-  versions: z.array(z.object({
-    version: z.number().optional(),
-    rule_type: z.string().optional(),
-    rules_hash: z.string().optional(),
-    change_description: z.string().optional(),
-    changed_by: z.string().optional(),
-    active: z.boolean().optional(),
-    created_at: z.string().optional(),
-  }).passthrough()).optional(),
-  total: z.number().optional(),
-}).passthrough();
-
 export async function firewallRuleHistory(
   input: z.infer<typeof firewallRuleHistorySchema>
-): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
+): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const { rule_type } = input;
 
   const { data: versions, error } = await dbAdmin
@@ -314,10 +220,7 @@ export async function firewallRuleHistory(
     .limit(20);
 
   if (error) {
-    return {
-      content: [{ type: 'text' as const, text: `Error fetching history: ${error.message}` }],
-      structuredContent: { error: error.message } as unknown as Record<string, unknown>,
-    };
+    return { content: [{ type: 'text' as const, text: `Error fetching history: ${error.message}` }] };
   }
 
   const payload = {
@@ -328,6 +231,5 @@ export async function firewallRuleHistory(
 
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }],
-    structuredContent: payload as unknown as Record<string, unknown>,
   };
 }
