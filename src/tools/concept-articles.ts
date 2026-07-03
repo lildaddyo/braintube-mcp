@@ -22,6 +22,8 @@ export const compileKnowledgeSchema = z.object({
   message: 'Provide cluster_id or brain_id',
 });
 
+export const compileKnowledgeOutputSchema = z.object({}).passthrough();
+
 export async function compileKnowledge(
   input: z.infer<typeof compileKnowledgeSchema>,
   userJwt?: string
@@ -77,6 +79,19 @@ export const getConceptArticlesSchema = z.object({
   limit: z.number().int().min(1).max(50).default(10).describe(
     'Max articles to return (default 10)'
   ),
+});
+
+export const getConceptArticlesOutputSchema = z.object({
+  articles: z.array(z.object({
+    id: z.string(),
+    title: z.string().optional(),
+    slug: z.string().optional(),
+    word_count: z.number().nullable().optional(),
+    backlinks: z.array(z.string()).nullable().optional(),
+    cluster_id: z.string().nullable().optional(),
+    brain_id: z.string().nullable().optional(),
+    created_at: z.string().optional(),
+  }).passthrough()),
 });
 
 export async function getConceptArticles(

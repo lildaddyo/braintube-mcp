@@ -7,6 +7,8 @@ export const retrievalQualitySchema = z.object({
   ),
 });
 
+export const retrievalQualityOutputSchema = z.object({}).passthrough();
+
 export async function retrievalQuality(
   input: z.infer<typeof retrievalQualitySchema>,
   userId: string

@@ -6,6 +6,15 @@ export const edgeHistorySchema = z.object({
   item_b: z.string().uuid().describe('UUID of the second item'),
 });
 
+export const getEdgeHistoryOutputSchema = z.object({
+  history: z.array(z.object({
+    edge_type: z.string().optional(),
+    confidence: z.number().nullable().optional(),
+    created_at: z.string().optional(),
+    updated_at: z.string().optional(),
+  }).passthrough()),
+});
+
 export async function getEdgeHistory(
   input: z.infer<typeof edgeHistorySchema>
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {

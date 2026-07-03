@@ -3,6 +3,10 @@ import { dbAdmin } from '../db/supabase.js';
 
 export const recomputeSalienceSchema = z.object({});
 
+export const recomputeSalienceOutputSchema = z.object({
+  updated_count: z.number().nullable(),
+});
+
 export async function recomputeSalience(
   _input: z.infer<typeof recomputeSalienceSchema>,
   userId: string
