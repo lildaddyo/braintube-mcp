@@ -97,7 +97,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   // Queried here so the result is available synchronously inside secureWrap
   // and the tool registration proxy without an extra DB round-trip per call.
   const userRole: UserRole = await resolveUserRole(auth.userId);
-  console.log(`[rbac] session for ${auth.userId} — role: ${userRole}`);
+  console.error(`[rbac] session for ${auth.userId} — role: ${userRole}`);
 
   const server = new McpServer({
     name: 'braintube-mcp',
@@ -328,7 +328,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     const requiredTier = getRequiredTier(name);
     if (!tierGrantsAccess(userRole, requiredTier)) {
       // Tool is invisible to this user — not in tools/list, not callable.
-      console.log(`[rbac] skipping registration of "${name}" (requires ${requiredTier}, user has ${userRole})`);
+      console.error(`[rbac] skipping registration of "${name}" (requires ${requiredTier}, user has ${userRole})`);
       return;
     }
 
@@ -1133,7 +1133,7 @@ Do not call get_session_brief() yet. Wait for the user's first message.`
   // is logged as an error — indicates a new pattern needs adding to the sanitizer.
   const auditWarnings = auditToolDescriptions(registeredToolMeta);
   if (auditWarnings.length === 0) {
-    console.log(`[security] tool description audit: ${registeredToolMeta.length} tools — all clean`);
+    console.error(`[security] tool description audit: ${registeredToolMeta.length} tools — all clean`);
   } else {
     for (const w of auditWarnings) {
       console.error(`[security] tool description audit WARNING: tool="${w.tool}" — ${w.warning}`);

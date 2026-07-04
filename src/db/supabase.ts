@@ -293,7 +293,7 @@ export async function semanticSearchRpc(
   limit = 10,
   threshold = 0.1
 ): Promise<SemanticResult[]> {
-  console.log(`[semanticSearchRpc] embedding dims=${embedding.length}, limit=${limit}, threshold=${threshold}`);
+  console.error(`[semanticSearchRpc] embedding dims=${embedding.length}, limit=${limit}, threshold=${threshold}`);
 
   const { data, error } = await dbAdmin.rpc('search_knowledge_semantic', {
     query_embedding: embedding,
@@ -308,9 +308,9 @@ export async function semanticSearchRpc(
   }
 
   const rows = (data ?? []) as SemanticResult[];
-  console.log(`[semanticSearchRpc] RPC returned ${rows.length} rows`);
+  console.error(`[semanticSearchRpc] RPC returned ${rows.length} rows`);
   if (rows.length > 0) {
-    console.log(`[semanticSearchRpc] top similarity=${rows[0].similarity?.toFixed(4)}, bottom=${rows[rows.length - 1].similarity?.toFixed(4)}`);
+    console.error(`[semanticSearchRpc] top similarity=${rows[0].similarity?.toFixed(4)}, bottom=${rows[rows.length - 1].similarity?.toFixed(4)}`);
   }
 
   return rows.map((row: SemanticResult) => ({ ...row, match_type: 'semantic' as const }));
@@ -350,7 +350,7 @@ export async function hybridSearchRpc(
   userId: string,
   limit = 10
 ): Promise<HybridResult[]> {
-  console.log(`[hybridSearchRpc] query="${query.slice(0, 80)}", dims=${embedding.length}, limit=${limit}`);
+  console.error(`[hybridSearchRpc] query="${query.slice(0, 80)}", dims=${embedding.length}, limit=${limit}`);
 
   const { data, error } = await dbAdmin.rpc('hybrid_search', {
     search_query:    query,
@@ -365,9 +365,9 @@ export async function hybridSearchRpc(
   }
 
   const rows = (data ?? []) as HybridResult[];
-  console.log(`[hybridSearchRpc] returned ${rows.length} rows`);
+  console.error(`[hybridSearchRpc] returned ${rows.length} rows`);
   if (rows.length > 0) {
-    console.log(`[hybridSearchRpc] top score=${rows[0].similarity?.toFixed(4)}, bottom=${rows[rows.length - 1].similarity?.toFixed(4)}`);
+    console.error(`[hybridSearchRpc] top score=${rows[0].similarity?.toFixed(4)}, bottom=${rows[rows.length - 1].similarity?.toFixed(4)}`);
   }
 
   return rows.map(row => ({ ...row, match_type: 'hybrid' as const }));
@@ -396,7 +396,7 @@ export async function adaptiveSearchRpc(
   userId: string,
   limit = 10
 ): Promise<AdaptiveResult[]> {
-  console.log(`[adaptiveSearchRpc] query="${query.slice(0, 80)}", dims=${embedding.length}, limit=${limit}`);
+  console.error(`[adaptiveSearchRpc] query="${query.slice(0, 80)}", dims=${embedding.length}, limit=${limit}`);
 
   const { data, error } = await dbAdmin.rpc('adaptive_search', {
     search_query:    query,
@@ -411,10 +411,10 @@ export async function adaptiveSearchRpc(
   }
 
   const rows = (data ?? []) as AdaptiveResult[];
-  console.log(`[adaptiveSearchRpc] returned ${rows.length} rows`);
+  console.error(`[adaptiveSearchRpc] returned ${rows.length} rows`);
   if (rows.length > 0) {
     const strategies = [...new Set(rows.map(r => r.strategy))].join(', ');
-    console.log(`[adaptiveSearchRpc] strategies=${strategies}, top score=${rows[0].similarity?.toFixed(4)}`);
+    console.error(`[adaptiveSearchRpc] strategies=${strategies}, top score=${rows[0].similarity?.toFixed(4)}`);
   }
 
   return rows;

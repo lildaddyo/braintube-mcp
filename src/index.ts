@@ -6,6 +6,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { Transport, TransportSendOptions } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { createMcpServer } from './server.js';
 import { getAuthContext } from './auth/jwt.js';
 import { handleObsidianSync } from './routes/obsidian-sync.js';
@@ -143,7 +146,7 @@ const mcpSessions = new Map<string, StreamableHTTPServerTransport>();
 setInterval(() => {
   const before = mcpSessions.size;
   mcpSessions.clear();
-  if (before > 0) console.log(`[mcp] session store pruned (${before} sessions evicted)`);
+  if (before > 0) console.error(`[mcp] session store pruned (${before} sessions evicted)`);
 }, 60 * 60 * 1000).unref();
 
 // ─── MCP endpoints ────────────────────────────────────────────────────────────
@@ -174,14 +177,14 @@ app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (sessionId) => {
       mcpSessions.set(sessionId, transport);
-      console.log(`[mcp] session created (${sessionId}) — ${mcpSessions.size} active`);
+      console.error(`[mcp] session created (${sessionId}) — ${mcpSessions.size} active`);
     },
   });
 
   transport.onclose = () => {
     if (transport.sessionId) {
       mcpSessions.delete(transport.sessionId);
-      console.log(`[mcp] session closed (${transport.sessionId}) — ${mcpSessions.size} active`);
+      console.error(`[mcp] session closed (${transport.sessionId}) — ${mcpSessions.size} active`);
     }
   };
 
@@ -215,7 +218,7 @@ app.get('/mcp-url', requireAuth, (req, res) => {
   const mcpUrlWithToken = `${baseUrl}/mcp?token=<your-supabase-token>`;
 
   // Log auth method for debugging (never log the JWT itself or userId)
-  console.log(`[mcp-url] request — method: ${auth.authMethod}, email: ${auth.email ?? 'unknown'}`);
+  console.error(`[mcp-url] request — method: ${auth.authMethod}, email: ${auth.email ?? 'unknown'}`);
 
   res.json({
     mcp_url: mcpUrl,
@@ -299,10 +302,10 @@ app.post('/api/extension-ingest', requireAuth, mcpRateLimit, async (req, res) =>
 app.post('/api/backfill', requireAuth, async (req, res) => {
   const auth = (req as express.Request & { auth: AuthContext }).auth;
   const batchSize = parseInt((req.query.batch_size as string) ?? '20', 10);
-  console.log(`[backfill] starting for user ${auth.userId}, batchSize=${batchSize}`);
+  console.error(`[backfill] starting for user ${auth.userId}, batchSize=${batchSize}`);
   try {
     const result = await backfillEmbeddings(auth.userId, batchSize);
-    console.log(`[backfill] done — embedded=${result.embedded}, errors=${result.errors}`);
+    console.error(`[backfill] done — embedded=${result.embedded}, errors=${result.errors}`);
     res.json({ ok: true, ...result });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -316,11 +319,114 @@ app.post('/api/backfill', requireAuth, async (req, res) => {
 // Body: { notes: [{ path, title, content, tags, modified_at }] }
 app.post('/api/obsidian-sync', handleObsidianSync);
 
+// ─── Stdio transport (Glama quality-test harness runs `mcp-proxy -- node dist/index.js` and
+// speaks MCP over stdin/stdout, not HTTP) ──────────────────────────────────────────────────
+//
+// Runs ALONGSIDE the HTTP server in the same process, always on — no TTY/isatty detection,
+// since Railway's stdin is equally non-interactive and simply never receives input, which is
+// harmless (the underlying StdioServerTransport only reacts to data it's given).
+//
+// stdout is reserved exclusively for JSON-RPC frames written by StdioServerTransport.send().
+// Every console.log in this codebase's runtime graph (excluding the standalone
+// src/cron/rnd-daily.ts process, which never shares this process's stdout) was moved to
+// console.error for this reason — a single stray stdout write mid-session would corrupt the
+// stdio client's JSON-RPC stream.
+//
+// Auth: BRAINTUBE_API_KEY env var, validated via the same getAuthContext() used for the
+// X-BrainTube-Token HTTP header (fed a minimal fake Request — no header-parsing duplicated).
+// If unset or invalid, initialize/tools-list still succeed (createMcpServer() never requires
+// a real user — resolveUserRole() degrades to 'authenticated' on any DB error), but tools/call
+// is intercepted before it reaches the server and answered with a clean auth-required MCP
+// error instead of running a handler against a fake/empty user id.
+
+class GatedStdioTransport implements Transport {
+  private inner = new StdioServerTransport();
+  onclose?: () => void;
+  onerror?: (error: Error) => void;
+  onmessage?: (message: JSONRPCMessage) => void;
+  sessionId?: string;
+
+  constructor(private authorized: boolean) {
+    this.inner.onclose = () => this.onclose?.();
+    this.inner.onerror = (error) => this.onerror?.(error);
+    this.inner.onmessage = (message) => {
+      const isToolCall =
+        'method' in message && message.method === 'tools/call' && 'id' in message;
+      if (isToolCall && !this.authorized) {
+        void this.inner.send({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            content: [{
+              type: 'text',
+              text: 'Auth required: set BRAINTUBE_API_KEY (a BrainTube API key) in this server\'s environment to call tools over stdio.',
+            }],
+            isError: true,
+          },
+        });
+        return;
+      }
+      this.onmessage?.(message);
+    };
+  }
+
+  start(): Promise<void> {
+    return this.inner.start();
+  }
+
+  send(message: JSONRPCMessage, _options?: TransportSendOptions): Promise<void> {
+    // StdioServerTransport.send() takes no options param (no resumption tokens over stdio).
+    return this.inner.send(message);
+  }
+
+  close(): Promise<void> {
+    return this.inner.close();
+  }
+}
+
+async function bootStdio(): Promise<void> {
+  // Defensive no-ops: Railway's stdin is inert and these events are not expected there, but if
+  // they ever fire (or fire under Glama's harness after it disconnects), never let them take
+  // the process down — the HTTP server must keep running regardless.
+  process.stdin.on('end', () => console.error('[stdio] stdin ended — HTTP transport unaffected'));
+  process.stdin.on('close', () => console.error('[stdio] stdin closed — HTTP transport unaffected'));
+  process.stdin.on('error', (err) => console.error('[stdio] stdin error (non-fatal):', err.message));
+
+  const apiKey = process.env.BRAINTUBE_API_KEY;
+  let auth: AuthContext = { userId: '', authMethod: 'apikey' };
+  let authorized = false;
+
+  if (apiKey) {
+    const fakeReq = { headers: { 'x-braintube-token': apiKey } } as unknown as express.Request;
+    const ctx = await getAuthContext(fakeReq);
+    if (ctx) {
+      auth = ctx;
+      authorized = true;
+    } else {
+      console.error('[stdio] BRAINTUBE_API_KEY set but invalid — tool calls will return an auth-required error');
+    }
+  } else {
+    console.error('[stdio] BRAINTUBE_API_KEY not set — initialize/tools-list available, tool calls will return an auth-required error');
+  }
+
+  const server = await createMcpServer(auth);
+  const transport = new GatedStdioTransport(authorized);
+  transport.onerror = (err) => console.error('[stdio] transport error (non-fatal):', err.message);
+  transport.onclose = () => console.error('[stdio] transport closed — HTTP transport unaffected');
+
+  await server.connect(transport);
+  console.error(`[stdio] MCP stdio transport connected (authorized=${authorized})`);
+}
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`BrainTube MCP v3 running on port ${PORT}`);
-  console.log(`Health:   http://localhost:${PORT}/health`);
-  console.log(`MCP:      http://localhost:${PORT}/mcp`);
-  console.log(`MCP URL:  http://localhost:${PORT}/mcp-url`);
-  console.log(`Obsidian: http://localhost:${PORT}/api/obsidian-sync`);
+  console.error(`BrainTube MCP v3 running on port ${PORT}`);
+  console.error(`Health:   http://localhost:${PORT}/health`);
+  console.error(`MCP:      http://localhost:${PORT}/mcp`);
+  console.error(`MCP URL:  http://localhost:${PORT}/mcp-url`);
+  console.error(`Obsidian: http://localhost:${PORT}/api/obsidian-sync`);
+});
+
+bootStdio().catch((err) => {
+  console.error('[stdio] failed to start stdio transport (HTTP transport unaffected):', err instanceof Error ? err.message : String(err));
 });

@@ -82,7 +82,7 @@ export async function requireCredits(
     );
   }
 
-  console.log(
+  console.error(
     `[credits] deducted for ${toolName} (user=${userId}, action=${action}, remaining=${result.remaining ?? '?'})`
   );
 }

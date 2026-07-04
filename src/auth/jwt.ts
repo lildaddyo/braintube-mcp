@@ -28,7 +28,7 @@ async function validateJWT(token: string): Promise<AuthContext | null> {
   try {
     const { data, error } = await getAdminClient().auth.getUser(token);
     if (error || !data.user) return null;
-    console.log(`[auth] jwt validated — email: ${data.user.email}`);
+    console.error(`[auth] jwt validated — email: ${data.user.email}`);
     return {
       userId: data.user.id,
       email: data.user.email,
@@ -66,7 +66,7 @@ async function validateApiKey(apiKey: string): Promise<AuthContext | null> {
           console.error(`[auth] last_used update threw for key hash ${hash.slice(0, 8)}…: ${err instanceof Error ? err.message : String(err)}`);
         }
       );
-    console.log('[auth] api key validated');
+    console.error('[auth] api key validated');
     return { userId: data.user_id as string, authMethod: 'apikey' };
   } catch {
     return null;
