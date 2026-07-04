@@ -472,7 +472,7 @@ serverCardRouter.get('/.well-known/mcp/server-card.json', (_req: Request, res: R
   res.json({
     serverInfo: {
       name: 'BrainTube',
-      version: '3.12.2',
+      version: '3.12.3',
     },
     homepage: 'https://brain-tube.com',
     authentication: {

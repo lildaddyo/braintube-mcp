@@ -3,7 +3,7 @@
 **Save once. Query anywhere.** BrainTube compiles what you watch, read and listen to — YouTube videos, podcasts, articles, PDFs — into a persistent, searchable knowledge base, and this MCP server exposes it to every MCP-capable AI client over one endpoint.
 
 - **Endpoint:** `https://mcp.brain-tube.com/mcp` (Streamable HTTP)
-- **Version:** 3.12.2
+- **Version:** 3.12.3
 - **Auth:** OAuth 2.0 (authorization code + PKCE) or a BrainTube API key via `X-BrainTube-Token` header
 - **Discovery:** [`/.well-known/oauth-protected-resource`](https://mcp.brain-tube.com/.well-known/oauth-protected-resource) · [`/.well-known/oauth-authorization-server`](https://mcp.brain-tube.com/.well-known/oauth-authorization-server)
 
