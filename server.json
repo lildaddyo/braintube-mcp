@@ -2,12 +2,12 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.lildaddyo/braintube-mcp",
   "title": "BrainTube",
-  "description": "Search everything you save: YouTube, articles, podcasts, PDFs, Notion, Obsidian. JWT auth.",
+  "description": "Search everything you save: YouTube, articles, podcasts, PDFs, Notion, Obsidian. X-BrainTube-Token or OAuth 2.0 (PKCE) auth.",
   "repository": {
     "url": "https://github.com/lildaddyo/braintube-mcp",
     "source": "github"
   },
-  "version": "3.12.2",
+  "version": "3.12.3",
   "websiteUrl": "https://brain-tube.com",
   "remotes": [
     {
@@ -16,7 +16,7 @@
       "headers": [
         {
           "name": "X-BrainTube-Token",
-          "description": "Optional — connect with a BrainTube API key from app.brain-tube.com → Settings → AI Integrations, or leave empty to sign in with OAuth.",
+          "description": "Optional — connect with a BrainTube API key from app.brain-tube.com → Settings → AI Integrations, or leave empty to sign in with OAuth 2.0 (authorization code + PKCE).",
           "isRequired": false,
           "isSecret": true
         }
