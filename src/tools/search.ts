@@ -41,17 +41,17 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
 
   const hasApiKey = !!process.env.OPENAI_API_KEY;
   const queryLongEnough = query.trim().length >= 3;
-  console.log(`[search] query="${query.slice(0, 80)}", limit=${limit}, hasApiKey=${hasApiKey}`);
+  console.error(`[search] query="${query.slice(0, 80)}", limit=${limit}, hasApiKey=${hasApiKey}`);
 
   // ── Hybrid path (vector + full-text RRF) ─────────────────────────────────────
   if (queryLongEnough && hasApiKey) {
     try {
-      console.log('[search] generating 768-dim query embedding for adaptive_search…');
+      console.error('[search] generating 768-dim query embedding for adaptive_search…');
       const embedding = await generateEmbedding(query, 768);
-      console.log(`[search] embedding generated, dims=${embedding.length}`);
+      console.error(`[search] embedding generated, dims=${embedding.length}`);
 
       const results = await adaptiveSearchRpc(query, embedding, userId, limit);
-      console.log(`[search] adaptive returned ${results.length} results`);
+      console.error(`[search] adaptive returned ${results.length} results`);
 
       if (results.length > 0) {
         void incrementRetrievalStats(results.map(r => r.id));
@@ -69,13 +69,13 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
           structuredContent: tainted as unknown as Record<string, unknown>
         };
       }
-      console.log('[search] adaptive returned 0 results, falling back to keyword');
+      console.error('[search] adaptive returned 0 results, falling back to keyword');
     } catch (err) {
       console.error('[search] adaptive path threw, falling back to keyword:', err);
       // Non-fatal — fall through to ILIKE
     }
   } else {
-    console.log(`[search] skipping adaptive (queryLongEnough=${queryLongEnough}, hasApiKey=${hasApiKey}), using keyword`);
+    console.error(`[search] skipping adaptive (queryLongEnough=${queryLongEnough}, hasApiKey=${hasApiKey}), using keyword`);
   }
 
   // ── Keyword fallback (ILIKE — no API key or hybrid returned nothing) ──────────

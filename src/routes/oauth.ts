@@ -250,7 +250,7 @@ oauthRouter.post('/oauth/authorize', async (req: Request, res: Response) => {
     codeChallengeMethod: pending.codeChallengeMethod,
   });
 
-  console.log(`[oauth] auth code issued — email: ${userEmail}`);
+  console.error(`[oauth] auth code issued — email: ${userEmail}`);
 
   // Defense-in-depth: re-validate immediately before redirect. Upstream gates
   // exist (allowlist at /oauth/register, registered-URI check at /oauth/authorize),
@@ -402,7 +402,7 @@ oauthRouter.get('/oauth/google/callback', async (req: Request, res: Response) =>
     codeChallengeMethod: pending.codeChallengeMethod,
   });
 
-  console.log(`[oauth/google/callback] auth code issued — email: ${tokenJson.user.email ?? '(no email)'}`);
+  console.error(`[oauth/google/callback] auth code issued — email: ${tokenJson.user.email ?? '(no email)'}`);
 
   // Defense-in-depth: see /oauth/authorize POST for the rationale.
   if (!isRedirectUriAllowed(pending.redirectUri)) {
@@ -450,7 +450,7 @@ oauthRouter.post('/oauth/token', async (req: Request, res: Response) => {
       return;
     }
 
-    console.log(`[oauth] token issued — email: ${entry.email}`);
+    console.error(`[oauth] token issued — email: ${entry.email}`);
 
     res.json({
       access_token: entry.accessToken,
@@ -492,7 +492,7 @@ oauthRouter.post('/oauth/token', async (req: Request, res: Response) => {
         expires_in?: number;
       };
 
-      console.log('[oauth] token refreshed silently');
+      console.error('[oauth] token refreshed silently');
 
       res.json({
         access_token: tokens.access_token,
