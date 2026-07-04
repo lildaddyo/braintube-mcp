@@ -1,6 +1,7 @@
 {
   "name": "braintube-mcp",
   "version": "3.12.3",
+  "license": "Elastic-2.0",
   "type": "module",
   "scripts": {
     "build": "tsc",
