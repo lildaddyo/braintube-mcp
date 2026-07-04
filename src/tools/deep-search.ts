@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { dbAdmin, adaptiveSearchRpc } from '../db/supabase.js';
+import { dbAdmin, adaptiveSearchRpc, logMcpRetrieval } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
@@ -70,6 +70,14 @@ export async function deepSearch(
   }));
 
   const totalNodesExplored = directResults.length + graphNodes.length;
+
+  void logMcpRetrieval(
+    userId,
+    query,
+    'mcp_deep_search',
+    totalNodesExplored,
+    [...directResults.map(r => r.id), ...graphNodes.map(n => n.id)]
+  );
 
   const summaryLines = [
     `Deep search for "${query}" — ${max_hops}-hop graph traversal`,

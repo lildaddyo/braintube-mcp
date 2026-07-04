@@ -252,6 +252,32 @@ export async function incrementRetrievalStats(itemIds: string[]): Promise<void> 
   }
 }
 
+/**
+ * Generic retrieval_log insert for MCP query tools that don't have bespoke
+ * logging (search_knowledge's adaptive/keyword paths log via logRetrieval in
+ * search.ts instead). Fire-and-forget — never throws, never delays the
+ * caller's tool response.
+ */
+export async function logMcpRetrieval(
+  userId: string,
+  queryText: string,
+  searchMethod: string,
+  resultCount: number,
+  retrievedItemIds: string[]
+): Promise<void> {
+  try {
+    await dbAdmin.from('retrieval_log').insert({
+      user_id:            userId,
+      query_text:         queryText,
+      search_method:      searchMethod,
+      result_count:       resultCount,
+      retrieved_item_ids: retrievedItemIds,
+    });
+  } catch (err) {
+    console.error(`[retrieval_log] insert failed for ${searchMethod} (non-fatal):`, err);
+  }
+}
+
 // ─── Daily ingest count ───────────────────────────────────────────────────────
 
 /** Count items this user has created (inserted) since the start of today (UTC). */

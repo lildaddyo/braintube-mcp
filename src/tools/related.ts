@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { dbAdmin, incrementRetrievalStats } from '../db/supabase.js';
+import { dbAdmin, incrementRetrievalStats, logMcpRetrieval } from '../db/supabase.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 
@@ -33,6 +33,7 @@ export async function getRelated(input: z.infer<typeof relatedSchema>, userId: s
   }
 
   void incrementRetrievalStats(results.map(r => r.id));
+  void logMcpRetrieval(userId, item_id, 'mcp_get_related', results.length, results.map(r => r.id));
   const tainted = wrapWithTaint(results);
   return {
     content: [{ type: 'text' as const, text: formatTaintedResponse(tainted) }],

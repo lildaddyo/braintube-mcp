@@ -4,7 +4,7 @@
  */
 
 import { z } from 'zod';
-import { dbAdmin } from '../db/supabase.js';
+import { dbAdmin, logMcpRetrieval } from '../db/supabase.js';
 
 // ── chat_with_brain ───────────────────────────────────────────────────────────
 
@@ -31,7 +31,8 @@ export const chatWithBrainOutputSchema = z.object({
 const BRAIN_CHAT_URL = 'https://iqjnmmtvhyavgrsxpoao.supabase.co/functions/v1/brain-chat';
 
 export async function chatWithBrain(
-  input: z.infer<typeof chatWithBrainSchema>
+  input: z.infer<typeof chatWithBrainSchema>,
+  userId: string
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
   const res = await fetch(BRAIN_CHAT_URL, {
     method:  'POST',
@@ -58,6 +59,8 @@ export async function chatWithBrain(
 
   const answer = data.answer ?? '';
   const sources = data.sources ?? [];
+
+  void logMcpRetrieval(userId, input.question, 'mcp_chat_with_brain', sources.length, []);
 
   const sourcesText = sources.length
     ? '\n\nSources:\n' + sources.map((s, i) => `${i + 1}. ${s.title}${s.url ? ' — ' + s.url : ''}`).join('\n')
