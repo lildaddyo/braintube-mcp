@@ -135,7 +135,7 @@ export const mostRetrievedSchema = z.object({
 export const mostRetrievedOutputSchema = z.object({
   items: z.array(z.object({
     item_id: z.string(),
-    title: z.string().optional(),
+    title: z.string().nullable().optional(),
     retrieval_count: z.number().optional(),
     last_retrieved: z.string().nullable().optional(),
   }).passthrough()),
