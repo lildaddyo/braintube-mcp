@@ -1,9 +1,20 @@
 import { createClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { Request } from 'express';
 
-const supabaseUrl = process.env.SUPABASE_URL!;
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-const adminClient = createClient(supabaseUrl, serviceKey);
+// Lazy singleton — avoids throwing at import time when env vars aren't set
+// yet (e.g. Glama's sandbox boot/ping check, which starts the process with
+// an empty environment before any real request is made).
+let _adminClient: SupabaseClient | null = null;
+function getAdminClient(): SupabaseClient {
+  if (!_adminClient) {
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl || !serviceKey) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set');
+    _adminClient = createClient(supabaseUrl, serviceKey);
+  }
+  return _adminClient;
+}
 
 export interface AuthContext {
   userId: string;
@@ -15,7 +26,7 @@ export interface AuthContext {
 // Validate a Supabase JWT via the Auth API (no local JWT secret needed)
 async function validateJWT(token: string): Promise<AuthContext | null> {
   try {
-    const { data, error } = await adminClient.auth.getUser(token);
+    const { data, error } = await getAdminClient().auth.getUser(token);
     if (error || !data.user) return null;
     console.log(`[auth] jwt validated — email: ${data.user.email}`);
     return {
@@ -35,7 +46,7 @@ async function validateApiKey(apiKey: string): Promise<AuthContext | null> {
   try {
     const { createHash } = await import('crypto');
     const hash = createHash('sha256').update(apiKey).digest('hex');
-    const { data } = await adminClient
+    const { data } = await getAdminClient()
       .from('api_keys')
       .select('user_id')
       .eq('key_hash', hash)
@@ -43,7 +54,7 @@ async function validateApiKey(apiKey: string): Promise<AuthContext | null> {
       .single();
     if (!data?.user_id) return null;
     // Fire-and-forget last_used update
-    void adminClient
+    void getAdminClient()
       .from('api_keys')
       .update({ last_used: new Date().toISOString() })
       .eq('key_hash', hash)

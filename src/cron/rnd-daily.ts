@@ -5,6 +5,7 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 // --- Config ------------------------------------------------------------------
 
@@ -33,8 +34,10 @@ const FIRECRAWL_COST_PER_PAGE = 0.002;
 const PERPLEXITY_COST_PER_CALL = 0.005;
 
 // --- DB client ----------------------------------------------------------------
-
-const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+// Constructed lazily inside main(), after the env check below, so importing
+// this module never throws on an empty environment (e.g. Glama's sandbox
+// boot/ping check).
+let db: SupabaseClient;
 
 // --- Sofia timezone window -> UTC bounds --------------------------------------
 
@@ -188,6 +191,8 @@ async function main() {
     console.error("[rnd-daily] missing PERPLEXITY_API_KEY");
     process.exit(1);
   }
+
+  db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
   const { start, end, runDate } = yesterdaySofiaUtcBounds();
   console.log(`[rnd-daily] window ${start} -> ${end} (run_date=${runDate})`);

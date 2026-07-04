@@ -1,11 +1,25 @@
 import { createClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
-const url = process.env.SUPABASE_URL!;
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+// Lazy singleton — avoids throwing at import time when env vars aren't set
+// yet (e.g. Glama's sandbox boot/ping check, which starts the process with
+// an empty environment before any real request is made).
+let _c: SupabaseClient | null = null;
+function getClient() {
+  if (!_c) {
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !key) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set');
+    _c = createClient(url, key);
+  }
+  return _c;
+}
 
 // Single service-role client — bypasses RLS.
 // Per-user isolation is enforced manually via .eq('user_id', userId) on every query.
-export const dbAdmin = createClient(url, serviceKey);
+export const dbAdmin = new Proxy({} as SupabaseClient, {
+  get: (_t, p) => (getClient() as any)[p],
+});
 
 // ─── Tags helper ────────────────────────────────────────────────────────────
 
