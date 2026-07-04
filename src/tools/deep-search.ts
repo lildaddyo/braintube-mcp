@@ -15,7 +15,7 @@ export const deepSearchOutputSchema = z.object({
   direct_results: z.array(looseItemSchema),
   graph_connected: z.array(z.object({
     id: z.string(),
-    title: z.string().optional(),
+    title: z.string().nullable().optional(),
     source_type: z.string().optional(),
     salience_score: z.number().nullable().optional(),
     via_item_id: z.string().optional(),

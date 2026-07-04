@@ -10,7 +10,7 @@ export const knowledgeGraphSchema = z.object({
 
 const graphNodeOutputSchema = z.object({
   id: z.string(),
-  title: z.string().optional(),
+  title: z.string().nullable().optional(),
   source_type: z.string().optional(),
   salience_score: z.number().nullable().optional(),
 }).passthrough();

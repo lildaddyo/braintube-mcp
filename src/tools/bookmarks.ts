@@ -16,7 +16,7 @@ export const listBookmarksOutputSchema = z.object({
   bookmarks: z.array(z.object({
     id: z.string(),
     title: z.string().optional(),
-    source_url: z.string().optional(),
+    source_url: z.string().nullable().optional(),
     source_type: z.string().optional(),
     tags: z.array(z.string()).optional(),
     is_read: z.boolean().optional(),
