@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { dbAdmin, semanticSearch, adaptiveSearchRpc, incrementRetrievalStats } from '../db/supabase.js';
+import { dbAdmin, semanticSearch, adaptiveSearchRpc, incrementRetrievalStats, logMcpRetrieval } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
@@ -92,6 +92,7 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
   }
 
   void incrementRetrievalStats(ilikeResults.map(r => r.id));
+  void logMcpRetrieval(userId, query, 'keyword_fallback', ilikeResults.length, ilikeResults.map(r => r.id));
 
   const withMatchType = ilikeResults.map(r => ({ ...r, match_type: 'keyword' as const }));
   const tainted = wrapWithTaint(withMatchType as Array<{ taint_level?: number }>);

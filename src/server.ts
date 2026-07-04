@@ -782,7 +782,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     async (input) => {
       await requirePaidPlan(auth.userId);
       await requireCredits(auth.userId, 'ai_chat', 'chat_with_brain');
-      return chatWithBrain(input);
+      return chatWithBrain(input, auth.userId);
     }
   );
 

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { dbAdmin, semanticSearchRpc, incrementRetrievalStats } from '../db/supabase.js';
+import { dbAdmin, semanticSearchRpc, incrementRetrievalStats, logMcpRetrieval } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
@@ -35,6 +35,7 @@ export async function searchBySource(input: z.infer<typeof searchBySourceSchema>
 
         if (filtered.length > 0) {
           void incrementRetrievalStats(filtered.map(r => r.id));
+          void logMcpRetrieval(userId, query, 'mcp_search_by_source', filtered.length, filtered.map(r => r.id));
           const tainted = wrapWithTaint(filtered.map(r => ({ ...r, match_type: 'semantic' })));
           return {
             content: [{ type: 'text' as const, text: formatTaintedResponse(tainted) }],
@@ -73,6 +74,7 @@ export async function searchBySource(input: z.infer<typeof searchBySourceSchema>
   }
 
   void incrementRetrievalStats(results.map(r => r.id));
+  void logMcpRetrieval(userId, query, 'mcp_search_by_source', results.length, results.map(r => r.id));
   const tainted = wrapWithTaint(results.map(r => ({ ...r, match_type: 'keyword' as const })));
   return {
     content: [{ type: 'text' as const, text: formatTaintedResponse(tainted) }],

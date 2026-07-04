@@ -352,7 +352,7 @@ restRouter.post('/brain-chat/:slug', async (req, res) => {
   try {
     await requirePaidPlan(auth(req).userId);
     await requireCredits(auth(req).userId, 'ai_chat', 'chat_with_brain');
-    const result = await chatWithBrain({ brain_slug, question, chat_history, session_id });
+    const result = await chatWithBrain({ brain_slug, question, chat_history, session_id }, auth(req).userId);
     res.json(unwrap(result));
   } catch (e) { send500(res, e); }
 });
