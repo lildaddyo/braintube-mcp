@@ -2,7 +2,7 @@
   "mcpServers": {
     "braintube": {
       "type": "http",
-      "url": "https://braintube-mcp-production.up.railway.app/mcp",
+      "url": "https://mcp.brain-tube.com/mcp",
       "headers": {
         "X-BrainTube-Token": "${BRAINTUBE_API_KEY:-}"
       }
