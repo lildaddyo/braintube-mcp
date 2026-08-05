@@ -1,6 +1,6 @@
 {
   "name": "braintube",
-  "version": "3.12.3",
+  "version": "3.12.4",
   "description": "BrainTube compiles what you watch and read into a knowledge base every AI can use. Semantic search over YouTube transcripts, articles, PDFs, EPUBs, Notion, podcasts, meeting audio and screenshots, from any MCP client.",
   "author": { "name": "BrainTube", "url": "https://brain-tube.com" },
   "homepage": "https://brain-tube.com",
