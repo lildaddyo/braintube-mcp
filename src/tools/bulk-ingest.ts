@@ -126,6 +126,7 @@ export async function bulkIngest(
             full_transcript: content,
             source_url:     source_url ?? null,
             url:            source_url ?? `braintube://manual/${Date.now()}`,
+            status:         'indexed',
             taint_level:    0,
             is_user_created: true,
             is_archived:    false,
