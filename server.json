@@ -2,12 +2,12 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.lildaddyo/braintube-mcp",
   "title": "BrainTube",
-  "description": "Search everything you save: YouTube, articles, podcasts, PDFs, Notion, Obsidian. API key or OAuth.",
+  "description": "BrainTube compiles what you watch and read into a knowledge base every AI can use.",
   "repository": {
     "url": "https://github.com/lildaddyo/braintube-mcp",
     "source": "github"
   },
-  "version": "3.12.3",
+  "version": "3.12.4",
   "websiteUrl": "https://brain-tube.com",
   "remotes": [
     {
