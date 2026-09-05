@@ -22,7 +22,7 @@ import { searchBySource } from '../tools/search-by-source.js';
 import { searchByDate } from '../tools/search-by-date.js';
 import { randomResuface } from '../tools/resurface.js';
 import { chatWithBrain, listBrains } from '../tools/brain-chat.js';
-import { requireCredits, requirePaidPlan } from '../lib/credits.js';
+import { requireCredits } from '../lib/credits.js';
 
 export const restRouter = express.Router();
 
@@ -72,7 +72,6 @@ restRouter.get('/search', async (req, res) => {
     return;
   }
   try {
-    await requirePaidPlan(auth(req).userId);
     await requireCredits(auth(req).userId, 'ai_search', 'search_knowledge');
     const result = await searchKnowledge(
       { query: q, limit: parseIntQ(limit, 5) },
@@ -149,7 +148,6 @@ restRouter.get('/bookmarks', async (req, res) => {
  */
 restRouter.get('/expertise', async (req, res) => {
   try {
-    await requirePaidPlan(auth(req).userId);
     await requireCredits(auth(req).userId, 'ai_search', 'get_expertise_profile');
     const result = await getExpertiseProfileTool({}, auth(req).userId);
     res.json(unwrap(result));
@@ -176,7 +174,6 @@ restRouter.get('/conversations', async (req, res) => {
  */
 restRouter.get('/session-brief', async (req, res) => {
   try {
-    await requirePaidPlan(auth(req).userId);
     await requireCredits(auth(req).userId, 'ai_chat', 'get_session_brief');
     const result = await getSessionBrief({}, auth(req).userId);
     res.json(unwrap(result));
@@ -208,7 +205,6 @@ restRouter.get('/search/source', async (req, res) => {
     return;
   }
   try {
-    await requirePaidPlan(auth(req).userId);
     await requireCredits(auth(req).userId, 'ai_search', 'search_by_source');
     const result = await searchBySource(
       { source_type: type as string, query: q as string, limit: parseIntQ(limit, 5) },
@@ -229,7 +225,6 @@ restRouter.get('/search/date', async (req, res) => {
     return;
   }
   try {
-    await requirePaidPlan(auth(req).userId);
     await requireCredits(auth(req).userId, 'ai_search', 'search_by_date_range');
     const result = await searchByDate(
       {
@@ -350,7 +345,6 @@ restRouter.post('/brain-chat/:slug', async (req, res) => {
     return;
   }
   try {
-    await requirePaidPlan(auth(req).userId);
     await requireCredits(auth(req).userId, 'ai_chat', 'chat_with_brain');
     const result = await chatWithBrain({ brain_slug, question, chat_history, session_id }, auth(req).userId);
     res.json(unwrap(result));
