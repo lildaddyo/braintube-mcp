@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { TaintedResponse } from '../types.js';
 
 const TAINT_LABELS: Record<number, string> = {
@@ -35,7 +36,10 @@ export function wrapWithTaint<T extends { taint_level?: number }>(
 export function checkWriteGate(token: string): boolean {
   const secret = process.env.WRITE_BACK_SECRET;
   if (!secret) return false;
-  return token === secret;
+  // Hash both sides so timingSafeEqual always compares equal-length buffers
+  const tokenDigest = createHash('sha256').update(token).digest();
+  const secretDigest = createHash('sha256').update(secret).digest();
+  return timingSafeEqual(tokenDigest, secretDigest);
 }
 
 // Format tainted response as MCP text content
