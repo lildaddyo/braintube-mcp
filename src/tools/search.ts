@@ -45,15 +45,17 @@ function mergeByBestScore(a: AdaptiveResult[], b: AdaptiveResult[], limit: numbe
 // same fields, same count - only the order can change. Fails open: on ANY problem (kill switch,
 // missing env, non-200, timeout, bad/missing scores, id mismatch) the input array is returned as is.
 // Kill switch: JEV_RERANK=off.
+// `windowSize` = how many leading rows are scored (10; 20 for the cc-rrk3 phrase-recall pool). Contract that
+// cc-rrk3 relies on: it returns the SAME array object when it did nothing and a fresh array when it re-ranked.
 type RerankRow = AdaptiveResult & { summary_oneliner?: string | null };
 
-async function jevRerank(query: string, rows: AdaptiveResult[]): Promise<AdaptiveResult[]> {
+async function jevRerank(query: string, rows: AdaptiveResult[], windowSize = 10): Promise<AdaptiveResult[]> {
   if (process.env.JEV_RERANK === 'off' || rows.length < 2) return rows;
   const baseUrl = process.env.SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!baseUrl || !serviceKey) return rows;
 
-  const top = rows.slice(0, 10) as RerankRow[];
+  const top = rows.slice(0, windowSize) as RerankRow[];
   const passages = top.map(r => ({
     id: r.id,
     title: r.title ?? null,
@@ -90,10 +92,80 @@ async function jevRerank(query: string, rows: AdaptiveResult[]): Promise<Adaptiv
       .map(x => x.r);
     const moved = ordered.filter((r, i) => r !== top[i]).length;
     console.error(`[jev-rerank] top ${top.length} re-ranked (model=${String(data.model ?? '?').slice(0, 40)}, ms=${Number(data.ms) || '?'}, moved=${moved})`);
-    return [...ordered, ...rows.slice(10)];
+    return [...ordered, ...rows.slice(windowSize)];
   } catch (err) {
     console.error(`[jev-rerank] skipped: ${err instanceof Error ? err.name : 'error'}`);
     return rows;
+  }
+}
+
+// -- Phrase recall (cc-rrk3, 2026-09-25) --------------------------------------------------------
+// Extra CANDIDATES for the JEV re-ranker: items whose best "how would I search for this" phrase matches the
+// query (RPC search_item_phrases, service_role only; it already drops archived, adult and taint>=3 items).
+// Phrase-only rows are hydrated with the columns adaptive_search returns and are ONLY ever returned after
+// jev-rerank has scored them - if the re-rank does not happen they are dropped (fail open = the adaptive result).
+// Inert when JEV_RERANK=off; kill switch: PHRASE_RECALL=off. Cyrillic queries are not touched.
+
+// Same test as the cross-lingual branch in searchKnowledge (U+0400-U+04FF), written with code points.
+const hasCyrillic = (s: string) => [...s].some(ch => { const cp = ch.codePointAt(0) ?? 0; return cp >= 0x400 && cp <= 0x4ff; });
+
+/** Ids of the user's items whose best search-phrase matches the query embedding, best first. Any error/timeout -> []. */
+async function phraseRecall(embedding: number[], userId: string): Promise<string[]> {
+  try {
+    const { data, error } = await dbAdmin
+      .rpc('search_item_phrases', { query_embedding: embedding, filter_user_id: userId, match_count: 10 })
+      .abortSignal(AbortSignal.timeout(1500));
+    if (error) {
+      console.error(`[phrase-recall] skipped: ${String(error.message).slice(0, 120)}`);
+      return [];
+    }
+    const ids: string[] = [];
+    for (const r of (data ?? []) as Array<{ id?: unknown }>) {
+      if (typeof r?.id === 'string' && !ids.includes(r.id)) ids.push(r.id);
+    }
+    return ids;
+  } catch (err) {
+    console.error(`[phrase-recall] skipped: ${err instanceof Error ? err.name : 'error'}`);
+    return [];
+  }
+}
+
+/** Phrase hits the adaptive search did not return, hydrated like adaptive_search rows (same columns), owner-checked. */
+async function hydratePhraseOnly(phraseIds: string[], adaptive: AdaptiveResult[], userId: string): Promise<AdaptiveResult[]> {
+  const have = new Set(adaptive.map(r => r.id));
+  const ids = phraseIds.filter(id => !have.has(id)).slice(0, 10);
+  if (ids.length === 0) return [];
+  try {
+    const { data, error } = await dbAdmin
+      .from('items')
+      .select('id, title, url, source_type, channel, summary, summary_oneliner, topic_primary, key_concepts, entities, tags, created_at')
+      .in('id', ids)
+      .eq('user_id', userId)
+      .abortSignal(AbortSignal.timeout(1500));
+    if (error) {
+      console.error(`[phrase-recall] hydrate skipped: ${String(error.message).slice(0, 120)}`);
+      return [];
+    }
+    const byId = new Map<string, Record<string, unknown>>();
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      if (typeof row.id === 'string') byId.set(row.id, row);
+    }
+    const rows: AdaptiveResult[] = [];
+    for (const id of ids) {                                   // keep the phrase RPC's order
+      const r = byId.get(id);
+      if (!r) continue;
+      rows.push({
+        id: r.id, title: r.title, url: r.url, source_type: r.source_type, channel: r.channel, summary: r.summary,
+        summary_oneliner: r.summary_oneliner, topic_primary: r.topic_primary, key_concepts: r.key_concepts, entities: r.entities,
+        tags: Array.isArray(r.tags) ? r.tags : [], created_at: r.created_at,
+        full_text_rank: null, semantic_rank: null, rrf_score: 0, strategy: 'phrase_recall',
+      } as unknown as AdaptiveResult);
+    }
+    console.error(`[phrase-recall] ${phraseIds.length} hits, ${ids.length} phrase-only, ${rows.length} hydrated`);
+    return rows;
+  } catch (err) {
+    console.error(`[phrase-recall] hydrate skipped: ${err instanceof Error ? err.name : 'error'}`);
+    return [];
   }
 }
 
@@ -125,6 +197,9 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
       // cc-rrk2: always retrieve a 10-row window for the JEV re-ranker, then trim to the caller's limit below.
       // With JEV_RERANK=off nothing changes (fetchLimit === limit).
       const fetchLimit = process.env.JEV_RERANK === 'off' ? limit : Math.max(limit, 10);
+      // cc-rrk3: start phrase recall alongside adaptive_search (only when the JEV re-rank is on; never for Cyrillic queries)
+      const phraseOn = process.env.JEV_RERANK !== 'off' && process.env.PHRASE_RECALL !== 'off' && !hasCyrillic(query);
+      const phrasePromise = phraseOn ? phraseRecall(embedding, userId) : null;
       let results = await adaptiveSearchRpc(query, embedding, userId, fetchLimit);
       console.error(`[search] adaptive returned ${results.length} results`);
 
@@ -144,8 +219,18 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
         const retrieved = results.slice(0, limit);
         void incrementRetrievalStats(retrieved.map(r => r.id));
         void logRetrieval(userId, query, retrieved);
-        // JEV re-rank of the top-10 window (cc-rrk1/rrk2), then trim to the caller's limit (kill switch JEV_RERANK=off)
-        results = (await jevRerank(query, results)).slice(0, limit);
+        // JEV re-rank of the top-10 window (cc-rrk1/rrk2), then trim to the caller's limit (kill switch JEV_RERANK=off).
+        // cc-rrk3: with phrase recall on, the pool is adaptive top-10 (in order) + phrase-only rows (max 20) and the WHOLE
+        // pool is scored; adaptive rows beyond the top 10 (limit > 10) stay after it.
+        const phraseOnly = phrasePromise ? await hydratePhraseOnly(await phrasePromise, results, userId) : [];
+        if (phraseOnly.length > 0) {
+          const pool = [...results.slice(0, 10), ...phraseOnly].slice(0, 20);
+          const ranked = await jevRerank(query, pool, 20);
+          // ranked === pool means jevRerank did nothing: fail open to exactly what the retriever returned (phrase-only rows dropped)
+          results = (ranked === pool ? results : [...ranked, ...results.slice(10)]).slice(0, limit);
+        } else {
+          results = (await jevRerank(query, results)).slice(0, limit);
+        }
         // Use strategy as match_type so callers can see which retrieval path was used
         const withMatchType = results.map(r => ({
           ...r,
