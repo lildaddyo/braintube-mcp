@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { dbAdmin, semanticSearch, adaptiveSearchRpc, incrementRetrievalStats, logMcpRetrieval } from '../db/supabase.js';
-import { generateEmbedding } from '../lib/openai.js';
+import { generateEmbedding, translateQueryToEnglish } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 import type { AdaptiveResult } from '../db/supabase.js';
@@ -23,6 +23,20 @@ async function logRetrieval(
   } catch (err) {
     console.error('[search] retrieval_log insert failed (non-fatal):', err);
   }
+}
+
+
+type Scored = AdaptiveResult & { rrf_score?: number | null };
+const scoreOf = (r: Scored) => (r.rrf_score ?? r.similarity ?? 0);
+
+/** Union two result lists by item id, keeping each item's best score, then re-rank. */
+function mergeByBestScore(a: AdaptiveResult[], b: AdaptiveResult[], limit: number): AdaptiveResult[] {
+  const best = new Map<string, Scored>();
+  for (const r of [...a, ...b] as Scored[]) {
+    const prev = best.get(r.id);
+    if (!prev || scoreOf(r) > scoreOf(prev)) best.set(r.id, r);
+  }
+  return [...best.values()].sort((x, y) => scoreOf(y) - scoreOf(x)).slice(0, limit);
 }
 
 export const searchSchema = z.object({
@@ -50,8 +64,19 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
       const embedding = await generateEmbedding(query, 768);
       console.error(`[search] embedding generated, dims=${embedding.length}`);
 
-      const results = await adaptiveSearchRpc(query, embedding, userId, limit);
+      let results = await adaptiveSearchRpc(query, embedding, userId, limit);
       console.error(`[search] adaptive returned ${results.length} results`);
+
+      // ── Cross-lingual (F3, 2026-09-25): Cyrillic queries also run in English ──
+      if (/[\u0400-\u04FF]/.test(query)) {
+        const translated = await translateQueryToEnglish(query);
+        if (translated) {
+          console.error(`[search] cross-lingual: "${translated.slice(0, 80)}"`);
+          const tEmbedding = await generateEmbedding(translated, 768);
+          const tResults = await adaptiveSearchRpc(translated, tEmbedding, userId, limit);
+          results = mergeByBestScore(results, tResults, limit);
+        }
+      }
 
       if (results.length > 0) {
         void incrementRetrievalStats(results.map(r => r.id));

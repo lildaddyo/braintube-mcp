@@ -389,7 +389,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'search_knowledge',
     {
-      description: 'Full-text search over your personal BrainTube knowledge corpus. Searches across YouTube, Instagram, web, LinkedIn, GitHub, Twitter and more. Returns results ranked by recency with taint warnings.',
+      description: 'Full-text search over your personal BrainTube knowledge corpus. Searches across YouTube, Instagram, web, LinkedIn, GitHub, Twitter and more. Hybrid ranking (semantic + keyword, reciprocal-rank fusion); Bulgarian/Cyrillic queries are also searched in English. Returns taint warnings.',
       inputSchema: searchSchema,
       outputSchema: searchKnowledgeOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }

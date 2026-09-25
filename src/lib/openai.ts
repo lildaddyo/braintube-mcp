@@ -23,3 +23,29 @@ export async function generateEmbedding(text: string, dimensions?: number): Prom
   });
   return response.data[0].embedding;
 }
+
+/**
+ * Translate a non-English search query to English for cross-lingual retrieval.
+ * Items are embedded/indexed mostly in English and full-text uses the 'english'
+ * config, so a Cyrillic query gets zero keyword hits and a weaker semantic match.
+ * Returns null on any failure — callers must fall back to the original query.
+ */
+export async function translateQueryToEnglish(text: string): Promise<string | null> {
+  try {
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 4000, maxRetries: 0 });
+    const res = await openai.chat.completions.create({
+      model: process.env.QUERY_TRANSLATE_MODEL ?? 'gpt-4o-mini',
+      temperature: 0,
+      max_tokens: 120,
+      messages: [
+        { role: 'system', content: 'Translate the user\'s search query into English. Keep technical terms, names and English words unchanged. Output only the translated query, nothing else.' },
+        { role: 'user', content: text.slice(0, 500) },
+      ],
+    });
+    const out = res.choices[0]?.message?.content?.trim();
+    return out && out.length > 0 ? out : null;
+  } catch (err) {
+    console.error('[translateQueryToEnglish] failed (non-fatal):', err);
+    return null;
+  }
+}
