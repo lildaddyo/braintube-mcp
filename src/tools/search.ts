@@ -122,7 +122,10 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
       const embedding = await generateEmbedding(query, 768);
       console.error(`[search] embedding generated, dims=${embedding.length}`);
 
-      let results = await adaptiveSearchRpc(query, embedding, userId, limit);
+      // cc-rrk2: always retrieve a 10-row window for the JEV re-ranker, then trim to the caller's limit below.
+      // With JEV_RERANK=off nothing changes (fetchLimit === limit).
+      const fetchLimit = process.env.JEV_RERANK === 'off' ? limit : Math.max(limit, 10);
+      let results = await adaptiveSearchRpc(query, embedding, userId, fetchLimit);
       console.error(`[search] adaptive returned ${results.length} results`);
 
       // ── Cross-lingual (F3, 2026-09-25): Cyrillic queries also run in English ──
@@ -131,16 +134,18 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
         if (translated) {
           console.error(`[search] cross-lingual: "${translated.slice(0, 80)}"`);
           const tEmbedding = await generateEmbedding(translated, 768);
-          const tResults = await adaptiveSearchRpc(translated, tEmbedding, userId, limit);
-          results = mergeByBestScore(results, tResults, limit);
+          const tResults = await adaptiveSearchRpc(translated, tEmbedding, userId, fetchLimit);
+          results = mergeByBestScore(results, tResults, fetchLimit);
         }
       }
 
       if (results.length > 0) {
-        void incrementRetrievalStats(results.map(r => r.id));
-        void logRetrieval(userId, query, results);
-        // JEV re-rank of the top 10 (cc-rrk1): same rows/fields/count, only the order can change (kill switch JEV_RERANK=off)
-        results = await jevRerank(query, results);
+        // Telemetry keeps recording exactly what the retriever returned for the caller's limit (retriever order).
+        const retrieved = results.slice(0, limit);
+        void incrementRetrievalStats(retrieved.map(r => r.id));
+        void logRetrieval(userId, query, retrieved);
+        // JEV re-rank of the top-10 window (cc-rrk1/rrk2), then trim to the caller's limit (kill switch JEV_RERANK=off)
+        results = (await jevRerank(query, results)).slice(0, limit);
         // Use strategy as match_type so callers can see which retrieval path was used
         const withMatchType = results.map(r => ({
           ...r,
