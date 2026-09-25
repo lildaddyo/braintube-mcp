@@ -39,6 +39,64 @@ function mergeByBestScore(a: AdaptiveResult[], b: AdaptiveResult[], limit: numbe
   return [...best.values()].sort((x, y) => scoreOf(y) - scoreOf(x)).slice(0, limit);
 }
 
+// -- JEV re-rank (cc-rrk1, 2026-09-25) ---------------------------------------------------------
+// Re-orders the TOP 10 hybrid results by JEV relevance via the jev-rerank edge function
+// (score = P(relevant) + 0.5 * P(partial)); rows after the 10th are appended unchanged. Same rows,
+// same fields, same count - only the order can change. Fails open: on ANY problem (kill switch,
+// missing env, non-200, timeout, bad/missing scores, id mismatch) the input array is returned as is.
+// Kill switch: JEV_RERANK=off.
+type RerankRow = AdaptiveResult & { summary_oneliner?: string | null };
+
+async function jevRerank(query: string, rows: AdaptiveResult[]): Promise<AdaptiveResult[]> {
+  if (process.env.JEV_RERANK === 'off' || rows.length < 2) return rows;
+  const baseUrl = process.env.SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!baseUrl || !serviceKey) return rows;
+
+  const top = rows.slice(0, 10) as RerankRow[];
+  const passages = top.map(r => ({
+    id: r.id,
+    title: r.title ?? null,
+    text: [r.summary_oneliner, r.summary].filter(Boolean).join('\n').slice(0, 1200),
+  }));
+
+  try {
+    const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/functions/v1/jev-rerank`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${serviceKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, passages }),
+      signal: AbortSignal.timeout(2500),
+    });
+    if (!res.ok) {
+      console.error(`[jev-rerank] skipped: HTTP ${res.status}`);
+      return rows;
+    }
+    const data = (await res.json()) as { model?: unknown; ms?: unknown; scores?: unknown };
+    if (!Array.isArray(data?.scores)) {
+      console.error('[jev-rerank] skipped: no scores in response');
+      return rows;
+    }
+    const scoreById = new Map<string, number>();
+    for (const s of data.scores as Array<{ id?: unknown; score?: unknown }>) {
+      if (typeof s?.id === 'string' && typeof s.score === 'number' && Number.isFinite(s.score)) scoreById.set(s.id, s.score);
+    }
+    if (top.some(r => !scoreById.has(r.id))) {
+      console.error('[jev-rerank] skipped: scores do not cover every passage id');
+      return rows;
+    }
+    const ordered = top
+      .map((r, i) => ({ r, i, s: scoreById.get(r.id) as number }))
+      .sort((a, b) => (b.s - a.s) || (a.i - b.i))
+      .map(x => x.r);
+    const moved = ordered.filter((r, i) => r !== top[i]).length;
+    console.error(`[jev-rerank] top ${top.length} re-ranked (model=${String(data.model ?? '?').slice(0, 40)}, ms=${Number(data.ms) || '?'}, moved=${moved})`);
+    return [...ordered, ...rows.slice(10)];
+  } catch (err) {
+    console.error(`[jev-rerank] skipped: ${err instanceof Error ? err.name : 'error'}`);
+    return rows;
+  }
+}
+
 export const searchSchema = z.object({
   query: z.string().min(1).max(500).describe(
     'Natural language search query. Examples: "LLM security", "habit formation", "Andrew Huberman sleep", "AI agents"'
@@ -81,6 +139,8 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
       if (results.length > 0) {
         void incrementRetrievalStats(results.map(r => r.id));
         void logRetrieval(userId, query, results);
+        // JEV re-rank of the top 10 (cc-rrk1): same rows/fields/count, only the order can change (kill switch JEV_RERANK=off)
+        results = await jevRerank(query, results);
         // Use strategy as match_type so callers can see which retrieval path was used
         const withMatchType = results.map(r => ({
           ...r,
