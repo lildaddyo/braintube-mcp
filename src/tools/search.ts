@@ -26,17 +26,30 @@ async function logRetrieval(
 }
 
 
-type Scored = AdaptiveResult & { rrf_score?: number | null };
-const scoreOf = (r: Scored) => (r.rrf_score ?? r.similarity ?? 0);
-
-/** Union two result lists by item id, keeping each item's best score, then re-rank. */
-function mergeByBestScore(a: AdaptiveResult[], b: AdaptiveResult[], limit: number): AdaptiveResult[] {
-  const best = new Map<string, Scored>();
-  for (const r of [...a, ...b] as Scored[]) {
-    const prev = best.get(r.id);
-    if (!prev || scoreOf(r) > scoreOf(prev)) best.set(r.id, r);
-  }
-  return [...best.values()].sort((x, y) => scoreOf(y) - scoreOf(x)).slice(0, limit);
+/**
+ * Multi-query reciprocal-rank fusion (F3b, 2026-09-25).
+ * Fuses the original-language run and the English-translation run by RANK, not raw score:
+ * score = sum over runs of 1/(k + rank). Items both runs agree on outrank items only one
+ * run found; raw RRF scores from two separate RPC calls are not comparable, ranks are.
+ * Ties break toward the English run (the corpus is mostly English), then original order.
+ */
+export function fuseRuns(original: AdaptiveResult[], english: AdaptiveResult[], limit: number, k = 60): AdaptiveResult[] {
+  const acc = new Map<string, { item: AdaptiveResult; score: number; enRank: number; origRank: number }>();
+  const add = (list: AdaptiveResult[], isEnglish: boolean) => {
+    list.forEach((r, i) => {
+      const rank = i + 1;
+      const cur = acc.get(r.id) ?? { item: r, score: 0, enRank: Infinity, origRank: Infinity };
+      cur.score += 1 / (k + rank);
+      if (isEnglish) cur.enRank = Math.min(cur.enRank, rank); else cur.origRank = Math.min(cur.origRank, rank);
+      acc.set(r.id, cur);
+    });
+  };
+  add(original, false);
+  add(english, true);
+  return [...acc.values()]
+    .sort((a, b) => (b.score - a.score) || (a.enRank - b.enRank) || (a.origRank - b.origRank))
+    .slice(0, limit)
+    .map(v => v.item);
 }
 
 export const searchSchema = z.object({
@@ -64,17 +77,21 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
       const embedding = await generateEmbedding(query, 768);
       console.error(`[search] embedding generated, dims=${embedding.length}`);
 
-      let results = await adaptiveSearchRpc(query, embedding, userId, limit);
+      // ── Cross-lingual (F3/F3b, 2026-09-25): Cyrillic queries also run in English, fused by rank ──
+      const isCyrillic = /[\u0400-\u04FF]/.test(query);
+      const fetchN = isCyrillic ? Math.min(Math.max(limit * 3, 15), 30) : limit;
+      let results = await adaptiveSearchRpc(query, embedding, userId, fetchN);
       console.error(`[search] adaptive returned ${results.length} results`);
 
-      // ── Cross-lingual (F3, 2026-09-25): Cyrillic queries also run in English ──
-      if (/[\u0400-\u04FF]/.test(query)) {
+      if (isCyrillic) {
         const translated = await translateQueryToEnglish(query);
         if (translated) {
           console.error(`[search] cross-lingual: "${translated.slice(0, 80)}"`);
           const tEmbedding = await generateEmbedding(translated, 768);
-          const tResults = await adaptiveSearchRpc(translated, tEmbedding, userId, limit);
-          results = mergeByBestScore(results, tResults, limit);
+          const tResults = await adaptiveSearchRpc(translated, tEmbedding, userId, fetchN);
+          results = fuseRuns(results, tResults, limit);
+        } else {
+          results = results.slice(0, limit);
         }
       }
 

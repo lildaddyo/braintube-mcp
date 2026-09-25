@@ -100,7 +100,7 @@ export interface ToolAnnotations {
 export const TOOLS = [
   {
     name: 'search_knowledge',
-    description: 'Full-text search over your personal BrainTube knowledge corpus. Searches across YouTube, Instagram, web, LinkedIn, GitHub, Twitter and more.',
+    description: 'Full-text search over your personal BrainTube knowledge corpus. Searches across YouTube, Instagram, web, LinkedIn, GitHub, Twitter and more. Hybrid ranking (semantic + keyword, reciprocal-rank fusion); Bulgarian/Cyrillic queries are also searched in English.',
     inputSchema: toInputSchema(searchSchema),
     outputSchema: toOutputSchema(searchKnowledgeOutputSchema),
     annotations: { readOnlyHint: true, openWorldHint: false },
