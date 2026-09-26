@@ -29,7 +29,7 @@ import {
   issueAuthCode,
   consumeAuthCode,
   verifyPkce,
-  isRedirectUriAllowed,
+  normalizeRedirectUri,
 } from '../auth/oauth-store.js';
 
 export const oauthRouter = Router();
@@ -123,18 +123,21 @@ oauthRouter.post('/oauth/register', (req: Request, res: Response) => {
     return;
   }
 
+  const redirectUris: string[] = [];
   for (const uri of body.redirect_uris) {
-    if (typeof uri !== 'string' || !isRedirectUriAllowed(uri)) {
+    const normalized = typeof uri === 'string' ? normalizeRedirectUri(uri) : null;
+    if (normalized === null) {
       res.status(400).json({
         error: 'invalid_redirect_uri',
         uri: typeof uri === 'string' ? uri : null,
       });
       return;
     }
+    redirectUris.push(normalized); // only the normalised value is stored
   }
 
   const client = registerClient(
-    body.redirect_uris,
+    redirectUris,
     typeof body.client_name === 'string' ? body.client_name : 'MCP Client'
   );
 
@@ -160,20 +163,25 @@ oauthRouter.get('/oauth/authorize', (req: Request, res: Response) => {
     res.status(400).send(errorPage('Missing required OAuth parameters (client_id, redirect_uri, state, code_challenge, response_type=code).'));
     return;
   }
+  if (code_challenge_method && code_challenge_method !== 'S256') {
+    res.status(400).send(errorPage('Only code_challenge_method=S256 is supported.'));
+    return;
+  }
 
   const client = getClient(client_id);
   if (!client) {
     res.status(400).send(errorPage('Unknown client_id. Please reconnect from Claude.ai.'));
     return;
   }
-  if (!client.redirectUris.includes(redirect_uri)) {
+  const requestedRedirect = normalizeRedirectUri(redirect_uri);
+  if (requestedRedirect === null || !client.redirectUris.includes(requestedRedirect)) {
     res.status(400).send(errorPage('redirect_uri not registered for this client.'));
     return;
   }
 
   storePendingAuth({
     clientId: client_id,
-    redirectUri: redirect_uri,
+    redirectUri: requestedRedirect,
     state,
     codeChallenge: code_challenge,
     codeChallengeMethod: code_challenge_method ?? 'S256',
@@ -256,13 +264,14 @@ oauthRouter.post('/oauth/authorize', async (req: Request, res: Response) => {
   // exist (allowlist at /oauth/register, registered-URI check at /oauth/authorize),
   // but SAST taint can't trace through consumePendingAuth and a future migration
   // of clientStore to Supabase could break the chain silently.
-  if (!isRedirectUriAllowed(pending.redirectUri)) {
+  const redirectTarget = normalizeRedirectUri(pending.redirectUri);
+  if (redirectTarget === null) {
     console.warn('[oauth] rejected redirect to non-allowlisted URI:', pending.redirectUri);
     res.status(400).json({ error: 'invalid_redirect_uri' });
     return;
   }
 
-  const redirectUrl = new URL(pending.redirectUri);
+  const redirectUrl = new URL(redirectTarget);
   redirectUrl.searchParams.set('code', code);
   redirectUrl.searchParams.set('state', pending.state);
   res.redirect(redirectUrl.toString());
@@ -405,13 +414,14 @@ oauthRouter.get('/oauth/google/callback', async (req: Request, res: Response) =>
   console.error(`[oauth/google/callback] auth code issued — email: ${tokenJson.user.email ?? '(no email)'}`);
 
   // Defense-in-depth: see /oauth/authorize POST for the rationale.
-  if (!isRedirectUriAllowed(pending.redirectUri)) {
+  const claudeRedirectTarget = normalizeRedirectUri(pending.redirectUri);
+  if (claudeRedirectTarget === null) {
     console.warn('[oauth/google/callback] rejected redirect to non-allowlisted URI:', pending.redirectUri);
     res.status(400).json({ error: 'invalid_redirect_uri' });
     return;
   }
 
-  const claudeRedirect = new URL(pending.redirectUri);
+  const claudeRedirect = new URL(claudeRedirectTarget);
   claudeRedirect.searchParams.set('code', mcpCode);
   claudeRedirect.searchParams.set('state', pending.state);
   //noaikido

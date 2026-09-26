@@ -126,7 +126,7 @@ app.get('/openapi.json', (req, res) => {
   const host  = process.env.RAILWAY_PUBLIC_DOMAIN
     ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
     : `${proto}://${req.headers.host}`;
-  res.json(buildOpenApiSpec(host));
+  res.json(buildOpenApiSpec(host, pkg.version));
 });
 
 // ─── REST API layer ───────────────────────────────────────────────────────────

@@ -3,24 +3,30 @@
  * Served at GET /openapi.json (no auth required).
  */
 
-export function buildOpenApiSpec(baseUrl: string) {
+export function buildOpenApiSpec(baseUrl: string, version: string) {
   return {
     openapi: '3.0.3',
     info: {
       title: 'BrainTube REST API',
-      version: '3.9.0',
-      description: 'Personal knowledge corpus API. All endpoints require a Supabase JWT via `Authorization: Bearer <token>`. Mirrors the BrainTube MCP tool set over plain HTTP for use by web apps, mobile clients, and chat widgets.',
+      version,
+      description: 'Personal knowledge corpus API covering search, corpus stats, bookmarks, ingest, and Brains over plain HTTP for use by web apps, mobile clients, and chat widgets. This is a subset of the full BrainTube MCP tool set, not a mirror of it. Authenticate with either a Supabase JWT via `Authorization: Bearer <token>` or a BrainTube API key (`bt_...`) via the `X-BrainTube-Token` header.',
       contact: { url: 'https://brain-tube.com' },
     },
     servers: [{ url: baseUrl, description: 'BrainTube MCP Server' }],
-    security: [{ bearerAuth: [] }],
+    security: [{ bearerAuth: [] }, { apiKeyAuth: [] }],
     components: {
       securitySchemes: {
         bearerAuth: {
           type: 'http',
           scheme: 'bearer',
           bearerFormat: 'JWT',
-          description: 'Supabase JWT or BrainTube API key (bt_...)',
+          description: 'Supabase JWT.',
+        },
+        apiKeyAuth: {
+          type: 'apiKey',
+          in: 'header',
+          name: 'X-BrainTube-Token',
+          description: 'BrainTube API key (bt_...). Not accepted via Authorization: Bearer.',
         },
       },
       schemas: {
@@ -157,8 +163,8 @@ export function buildOpenApiSpec(baseUrl: string) {
           tags: ['Search'],
           parameters: [
             { name: 'q', in: 'query', required: true, schema: { type: 'string' } },
-            { name: 'after', in: 'query', schema: { type: 'string', format: 'date' }, description: 'ISO 8601 date (inclusive)' },
-            { name: 'before', in: 'query', schema: { type: 'string', format: 'date' }, description: 'ISO 8601 date (inclusive)' },
+            { name: 'after', in: 'query', required: true, schema: { type: 'string', format: 'date' }, description: 'ISO 8601 date (inclusive)' },
+            { name: 'before', in: 'query', required: true, schema: { type: 'string', format: 'date' }, description: 'ISO 8601 date (inclusive)' },
             { name: 'limit', in: 'query', schema: { type: 'integer', default: 5 } },
           ],
           responses: {
