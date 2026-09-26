@@ -1,35 +1,65 @@
 import { createHash, randomBytes } from 'crypto';
 
 // ─── redirect_uri allowlist ───────────────────────────────────────────────────
-// Patterns that any client may register. `*` matches a single path/host segment
-// (no slashes); `**` matches across slashes. Adjust deliberately — these gate
-// every redirect we emit, so a permissive entry is an open-redirect oracle.
-const REDIRECT_URI_ALLOWLIST = [
-  'https://claude.ai/**',
+// Exact callbacks (confirmed real paths) are matched on origin + pathname only —
+// no path is left open to registration. Providers whose exact callback path
+// hasn't been confirmed keep a glob entry; `*` matches a single path/host
+// segment (no slashes), `**` matches across slashes. Adjust deliberately —
+// these gate every redirect we emit, so a permissive entry is an open-redirect
+// oracle for that path (though never for a domain the attacker doesn't control).
+const EXACT_REDIRECT_URIS = new Set([
+  'https://claude.ai/api/mcp/auth_callback',
+  'https://claude.com/api/mcp/auth_callback', // Anthropic's newer domain — keep in sync with claude.ai
+  'https://smithery.run/oauth/callback',
+]);
+
+// TODO: confirm exact callback paths for these and move them into
+// EXACT_REDIRECT_URIS — left as path-wildcards for now because guessing wrong
+// would break live integrations. cursor.sh is also worth re-checking: Cursor's
+// current product domain is cursor.com, not cursor.sh.
+const REDIRECT_URI_GLOB_ALLOWLIST = [
   'https://*.claude.ai/**',
   'https://*.anthropic.com/**',
   'https://cursor.sh/**',
   'https://*.cursor.sh/**',
   'https://codeium.com/**',
   'https://*.windsurf.dev/**',
-  'http://localhost:*/**',
-  'http://127.0.0.1:*/**',
-  'https://smithery.run/oauth/callback',
 ];
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
 function globToRegex(p: string): RegExp {
   const esc = p.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp('^' + esc.replace(/\*\*/g, '\x00').replace(/\*/g, '[^/]*').replace(/\x00/g, '.*') + '$');
 }
 
-const allowlistRegexes = REDIRECT_URI_ALLOWLIST.map(globToRegex);
+const allowlistRegexes = REDIRECT_URI_GLOB_ALLOWLIST.map(globToRegex);
 
 export function isRedirectUriAllowed(uri: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(uri);
+  } catch {
+    return false;
+  }
+  if (u.username || u.password) return false; // no userinfo smuggling
+  if (u.search || u.hash) return false; // no query/fragment smuggling
+
+  if (EXACT_REDIRECT_URIS.has(u.origin + u.pathname)) return true;
+
+  // RFC 8252 §7.3 — native/CLI clients bind an ephemeral loopback port; port
+  // and path are intentionally unconstrained.
+  if (u.protocol === 'http:' && LOOPBACK_HOSTS.has(u.hostname)) return true;
+
   return allowlistRegexes.some((re) => re.test(uri));
 }
 
 // ─── Registered OAuth clients (RFC 7591 dynamic client registration) ──────────
 // Stored in-memory — clients re-register each session, so loss on restart is fine.
+// Registration is unauthenticated (anyone can POST /oauth/register), so entries
+// are swept on a TTL the same way pendingAuths is, to bound memory growth from
+// anonymous registration spam. There is currently no admin list/revoke endpoint
+// for this store — see the CLIENT_TTL_MS comment below before adding one.
 
 export interface OAuthClient {
   clientId: string;
@@ -40,8 +70,14 @@ export interface OAuthClient {
 }
 
 const clients = new Map<string, OAuthClient>();
+const CLIENT_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — generous vs. "clients re-register each session"
 
 export function registerClient(redirectUris: string[], clientName: string): OAuthClient {
+  const cutoff = Date.now() - CLIENT_TTL_MS;
+  for (const [key, val] of clients) {
+    if (val.registeredAt < cutoff) clients.delete(key);
+  }
+
   const clientId = `bt_client_${randomBytes(16).toString('hex')}`;
   const clientSecret = randomBytes(32).toString('hex');
   const client: OAuthClient = {
@@ -136,18 +172,17 @@ export function consumeAuthCode(code: string): AuthCodeEntry | undefined {
 }
 
 // ─── PKCE verification (RFC 7636) ────────────────────────────────────────────
+// Only S256 is accepted — matches code_challenge_methods_supported in
+// /.well-known/oauth-authorization-server. 'plain' is intentionally not
+// supported: it offers no protection against an observer who saw the
+// code_challenge in the initial /authorize request replaying it as the verifier.
 
 export function verifyPkce(
   codeVerifier: string,
   codeChallenge: string,
   method: string
 ): boolean {
-  if (method === 'S256') {
-    const computed = createHash('sha256').update(codeVerifier).digest('base64url');
-    return computed === codeChallenge;
-  }
-  if (method === 'plain') {
-    return codeVerifier === codeChallenge;
-  }
-  return false;
+  if (method !== 'S256') return false;
+  const computed = createHash('sha256').update(codeVerifier).digest('base64url');
+  return computed === codeChallenge;
 }

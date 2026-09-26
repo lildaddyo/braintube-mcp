@@ -160,6 +160,10 @@ oauthRouter.get('/oauth/authorize', (req: Request, res: Response) => {
     res.status(400).send(errorPage('Missing required OAuth parameters (client_id, redirect_uri, state, code_challenge, response_type=code).'));
     return;
   }
+  if (code_challenge_method && code_challenge_method !== 'S256') {
+    res.status(400).send(errorPage('Only code_challenge_method=S256 is supported.'));
+    return;
+  }
 
   const client = getClient(client_id);
   if (!client) {
