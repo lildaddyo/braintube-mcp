@@ -16,6 +16,7 @@ import { oauthRouter } from './routes/oauth.js';
 import { serverCardRouter } from './routes/server-card.js';
 import { glamaRouter } from './routes/glama.js';
 import { restRouter } from './routes/rest.js';
+import { sessionIngestBodyParser, sessionIngestRouter } from './routes/session-ingest.js';
 import { buildOpenApiSpec } from './routes/openapi.js';
 import { ingestContent } from './tools/ingest.js';
 import { summariseConversation } from './tools/summarise.js';
@@ -33,6 +34,9 @@ const pkg = JSON.parse(
 
 const app = express();
 app.use(helmet());
+// POST /api/session-ingest takes up to 5 MB of JSON, so it gets its own parser AHEAD of the 100 kb global
+// one below. requireAuth runs first: an unauthenticated caller must never be able to make us buffer 5 MB.
+app.post('/api/session-ingest', requireAuth, sessionIngestBodyParser);
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); // needed for OAuth login form POST
 
@@ -134,6 +138,11 @@ app.get('/openapi.json', (req, res) => {
 // Existing specific /api/* routes (extension-ingest, backfill, obsidian-sync)
 // are registered after and take precedence for their exact paths.
 app.use('/api', requireAuth, mcpRateLimit, restRouter);
+
+// Session archive ingest: POST /api/session-ingest and GET /api/session-ingest/cursor.
+// Registered after the /api layer above, so requireAuth + mcpRateLimit have already run and req.auth is set
+// (the router re-checks it and fails closed). The POST body was parsed by the 5 MB parser registered at the top.
+app.use('/api/session-ingest', sessionIngestRouter);
 
 // ─── MCP session store ────────────────────────────────────────────────────────
 // Maps Mcp-Session-Id → live transport so that tools/list, tools/call, etc.
