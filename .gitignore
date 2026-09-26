@@ -7,3 +7,5 @@ search_out.json
 stats_out.json
 check_401.json
 link_resp.json
+*_out.json
+*_resp.json
