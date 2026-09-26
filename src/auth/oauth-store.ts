@@ -1,12 +1,14 @@
 import { createHash, randomBytes } from 'crypto';
 
 // ─── redirect_uri allowlist ───────────────────────────────────────────────────
-// Exact callbacks (confirmed real paths) are matched on origin + pathname only —
-// no path is left open to registration. Providers whose exact callback path
-// hasn't been confirmed keep a glob entry; `*` matches a single path/host
-// segment (no slashes), `**` matches across slashes. Adjust deliberately —
-// these gate every redirect we emit, so a permissive entry is an open-redirect
-// oracle for that path (though never for a domain the attacker doesn't control).
+// Every entry is evaluated against the parsed, normalised URL
+// (`protocol//host/path`), never the raw string. Exact callbacks (confirmed real
+// paths) match on origin + pathname only — no path is left open to registration.
+// Providers whose exact callback path hasn't been confirmed keep a glob entry;
+// `*` matches a single path/host segment (no slashes), `**` matches across
+// slashes. Adjust deliberately — these gate every redirect we emit, so a
+// permissive entry is an open-redirect oracle for that path (though never for a
+// domain the attacker doesn't control).
 const EXACT_REDIRECT_URIS = new Set([
   'https://claude.ai/api/mcp/auth_callback',
   'https://claude.com/api/mcp/auth_callback', // Anthropic's newer domain — keep in sync with claude.ai
@@ -26,7 +28,11 @@ const REDIRECT_URI_GLOB_ALLOWLIST = [
   'https://*.windsurf.dev/**',
 ];
 
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+// URL.hostname keeps the brackets on IPv6 literals.
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+// Canonical spellings only: raw input containing any of these is rejected.
+const NON_CANONICAL_CHARS = /[\\\x00-\x20\x7f-\x9f\s]/;
 
 function globToRegex(p: string): RegExp {
   const esc = p.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
@@ -35,23 +41,34 @@ function globToRegex(p: string): RegExp {
 
 const allowlistRegexes = REDIRECT_URI_GLOB_ALLOWLIST.map(globToRegex);
 
-export function isRedirectUriAllowed(uri: string): boolean {
+// The single place a redirect_uri is judged. Returns the normalised
+// `protocol//host/path` of an allowed URI, or null. Callers register, compare
+// and redirect to this returned value, never to the raw input.
+export function normalizeRedirectUri(uri: string): string | null {
+  if (typeof uri !== 'string' || NON_CANONICAL_CHARS.test(uri)) return null;
   let u: URL;
   try {
     u = new URL(uri);
   } catch {
-    return false;
+    return null;
   }
-  if (u.username || u.password) return false; // no userinfo smuggling
-  if (u.search || u.hash) return false; // no query/fragment smuggling
-
-  if (EXACT_REDIRECT_URIS.has(u.origin + u.pathname)) return true;
+  if (u.username || u.password) return null; // no userinfo smuggling
+  if (u.search || u.hash) return null; // no query/fragment smuggling
 
   // RFC 8252 §7.3 — native/CLI clients bind an ephemeral loopback port; port
   // and path are intentionally unconstrained.
-  if (u.protocol === 'http:' && LOOPBACK_HOSTS.has(u.hostname)) return true;
+  const loopback = u.protocol === 'http:' && LOOPBACK_HOSTS.has(u.hostname);
+  if (u.protocol !== 'https:' && !loopback) return null;
 
-  return allowlistRegexes.some((re) => re.test(uri));
+  const normalized = `${u.protocol}//${u.host}${u.pathname}`;
+  if (loopback || EXACT_REDIRECT_URIS.has(normalized) || allowlistRegexes.some((re) => re.test(normalized))) {
+    return normalized;
+  }
+  return null;
+}
+
+export function isRedirectUriAllowed(uri: string): boolean {
+  return normalizeRedirectUri(uri) !== null;
 }
 
 // ─── Registered OAuth clients (RFC 7591 dynamic client registration) ──────────
