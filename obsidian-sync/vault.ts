@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync, statSync } from 'fs';
-import { join, relative, extname, basename } from 'path';
+import { lstatSync, readdirSync, readFileSync, realpathSync } from 'fs';
+import { join, relative, extname, basename, isAbsolute } from 'path';
 
 export interface VaultFile {
   path: string;       // relative to vault root, using forward slashes
@@ -19,6 +19,12 @@ const SKIP_FOLDERS = new Set(['.obsidian', '.trash', '.git']);
  */
 export function readVault(vaultPath: string): VaultFile[] {
   const results: VaultFile[] = [];
+  // Resolve the vault root once; every file we read must live under it.
+  const vaultRoot = realpathSync(vaultPath);
+  const isInsideVault = (p: string): boolean => {
+    const rel = relative(vaultRoot, p);
+    return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+  };
 
   function walk(dir: string): void {
     let entries: string[];
@@ -36,10 +42,13 @@ export function readVault(vaultPath: string): VaultFile[] {
       const fullPath = join(dir, entry);
       let stat;
       try {
-        stat = statSync(fullPath);
+        // lstat: never follow symlinks, so a link inside the vault cannot
+        // pull files from elsewhere on disk into the sync.
+        stat = lstatSync(fullPath);
       } catch {
         continue;
       }
+      if (stat.isSymbolicLink() || !isInsideVault(fullPath)) continue;
 
       if (stat.isDirectory()) {
         if (SKIP_FOLDERS.has(entry)) continue;
@@ -54,7 +63,7 @@ export function readVault(vaultPath: string): VaultFile[] {
         }
 
         // Normalise path separator to forward slash for cross-platform consistency
-        const relPath = relative(vaultPath, fullPath).replace(/\\/g, '/');
+        const relPath = relative(vaultRoot, fullPath).replace(/\\/g, '/');
         const title = basename(entry, '.md');
 
         results.push({
@@ -67,6 +76,6 @@ export function readVault(vaultPath: string): VaultFile[] {
     }
   }
 
-  walk(vaultPath);
+  walk(vaultRoot);
   return results;
 }
