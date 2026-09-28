@@ -12,7 +12,6 @@
 
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import { z } from 'zod';
 
 import { searchSchema, searchKnowledgeOutputSchema } from '../tools/search.js';
@@ -70,8 +69,29 @@ import {
   ingestNotionDatabaseSchema, ingestNotionDatabaseOutputSchema,
   setNotionApiKeySchema, setNotionApiKeyOutputSchema,
 } from '../tools/notion-schemas.js';
+// zod v4 ships its own JSON Schema emitter; zod-to-json-schema only understands
+// zod v3 types. draft-7 + io:'input' matches the previous jsonSchema7 output.
+// In input mode zod v4 omits additionalProperties for default (strip) objects,
+// while zod-to-json-schema emitted `false`; restore that so the published
+// listing stays byte-for-byte equivalent. Loose/passthrough objects keep `{}`.
+function closeStripObjects(node: unknown): void {
+  if (Array.isArray(node)) { node.forEach(closeStripObjects); return; }
+  if (!node || typeof node !== 'object') return;
+  const obj = node as Record<string, unknown>;
+  if (obj.type === 'object' && obj.properties && !('additionalProperties' in obj)) {
+    obj.additionalProperties = false;
+  }
+  Object.values(obj).forEach(closeStripObjects);
+}
+
+function toJsonSchema7(schema: z.ZodTypeAny): Record<string, unknown> {
+  const json = z.toJSONSchema(schema, { target: 'draft-7', io: 'input', unrepresentable: 'any' }) as Record<string, unknown>;
+  closeStripObjects(json);
+  return json;
+}
+
 function toInputSchema(schema: z.ZodTypeAny): Record<string, unknown> {
-  return zodToJsonSchema(schema, { target: 'jsonSchema7' }) as Record<string, unknown>;
+  return toJsonSchema7(schema);
 }
 
 // Deliberately NOT unioned with shortCircuitEnvelopeSchema — see
@@ -79,7 +99,7 @@ function toInputSchema(schema: z.ZodTypeAny): Record<string, unknown> {
 // SDK's runtime output validation (incident: commit 0cbcf01). This must
 // match exactly what's registered at runtime in server.ts.
 function toOutputSchema(schema: z.ZodTypeAny): Record<string, unknown> {
-  return zodToJsonSchema(schema, { target: 'jsonSchema7' }) as Record<string, unknown>;
+  return toJsonSchema7(schema);
 }
 
 // generate_api_key has no backing src/tools/ file (same as its inputSchema below,

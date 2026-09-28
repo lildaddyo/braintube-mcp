@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { dbAdmin } from '../db/supabase.js';
 
 export const findPathSchema = z.object({
-  item_a:    z.string().uuid().describe('UUID of the start item'),
-  item_b:    z.string().uuid().describe('UUID of the end item'),
+  item_a:    z.string().guid().describe('UUID of the start item'),
+  item_b:    z.string().guid().describe('UUID of the end item'),
   max_depth: z.number().int().min(1).max(10).default(5).describe(
     'Maximum path length to search (default 5)'
   ),

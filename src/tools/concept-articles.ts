@@ -12,10 +12,10 @@ const COMPILE_KNOWLEDGE_URL =
 // ── compile_knowledge ─────────────────────────────────────────────────────────
 
 export const compileKnowledgeSchema = z.object({
-  cluster_id: z.string().uuid().optional().describe(
+  cluster_id: z.string().guid().optional().describe(
     'UUID of a topic_cluster to compile. Either cluster_id or brain_id must be provided.'
   ),
-  brain_id: z.string().uuid().optional().describe(
+  brain_id: z.string().guid().optional().describe(
     'UUID of a Brain to compile all its clusters. Either cluster_id or brain_id must be provided.'
   ),
 }).refine(d => d.cluster_id || d.brain_id, {
@@ -71,8 +71,8 @@ export async function compileKnowledge(
 // ── get_concept_articles ──────────────────────────────────────────────────────
 
 export const getConceptArticlesSchema = z.object({
-  cluster_id: z.string().uuid().optional().describe('Filter by topic_cluster UUID'),
-  brain_id:   z.string().uuid().optional().describe('Filter by Brain UUID'),
+  cluster_id: z.string().guid().optional().describe('Filter by topic_cluster UUID'),
+  brain_id:   z.string().guid().optional().describe('Filter by Brain UUID'),
   query:      z.string().min(1).max(300).optional().describe(
     'Optional text search against title and body'
   ),

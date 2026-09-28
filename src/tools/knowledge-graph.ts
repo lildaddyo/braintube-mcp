@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { dbAdmin } from '../db/supabase.js';
 
 export const knowledgeGraphSchema = z.object({
-  item_id: z.string().uuid().describe('UUID of the center item to build the graph around'),
+  item_id: z.string().guid().describe('UUID of the center item to build the graph around'),
   depth: z.number().int().min(1).max(3).default(1).describe(
     'Graph traversal depth (default 1). Depth 2-3 expands to neighbours of neighbours.'
   )
