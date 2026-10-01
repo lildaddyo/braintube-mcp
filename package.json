@@ -1,6 +1,6 @@
 {
   "name": "braintube-mcp",
-  "version": "3.14.4",
+  "version": "3.14.5",
   "license": "Elastic-2.0",
   "type": "module",
   "scripts": {
