@@ -17,40 +17,56 @@ export const findPathOutputSchema = z.object({
 });
 
 export async function findPath(
-  input: z.infer<typeof findPathSchema>
+  input: z.infer<typeof findPathSchema>,
+  userId: string,
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
   const { item_a, item_b, max_depth } = input;
 
+  // find_shortest_path(p_user_id, p_from_id, p_to_id, p_max_depth, p_edge_types)
+  // returns one row per edge on the path (step, source_id, target_id,
+  // edge_type), scoped to the caller's own knowledge_edges.
   const { data, error } = await dbAdmin.rpc('find_shortest_path', {
-    start_id:  item_a,
-    end_id:    item_b,
-    max_depth,
+    p_user_id:    userId,
+    p_from_id:    item_a,
+    p_to_id:      item_b,
+    p_max_depth:  max_depth,
+    p_edge_types: null,
   });
 
-  if (error) throw new Error(`find_shortest_path RPC failed: ${error.message}`);
+  if (error) throw new Error(`Path search failed: ${error.message}`);
 
-  const result = data as {
-    path_item_ids?: string[];
-    path_edge_types?: string[];
-    path_length?: number;
-  } | null;
+  const rows = ((data ?? []) as Array<{ step: number; source_id: string; target_id: string; edge_type: string }>)
+    .slice()
+    .sort((a, b) => a.step - b.step);
 
-  if (!result || !result.path_item_ids?.length) {
+  // Walk the edges from item_a, following whichever endpoint is not the current node
+  // (edges are traversed in both directions).
+  const path_item_ids: string[] = [item_a];
+  const path_edge_types: string[] = [];
+  let current = item_a;
+  for (const row of rows) {
+    const next = row.source_id === current ? row.target_id : row.target_id === current ? row.source_id : null;
+    if (next === null) break;
+    path_item_ids.push(next);
+    path_edge_types.push(String(row.edge_type));
+    current = next;
+    if (current === item_b) break;
+  }
+
+  if (current !== item_b || path_item_ids.length < 2) {
     return {
       content: [{ type: 'text' as const, text: `No path found between ${item_a.slice(0, 8)} and ${item_b.slice(0, 8)} within depth ${max_depth}.` }],
       structuredContent: { found: false, path_item_ids: [], path_edge_types: [], path_length: null },
     };
   }
 
-  const { path_item_ids, path_edge_types = [], path_length } = result;
+  const steps = path_item_ids.map((id, i) =>
+    i < path_edge_types.length ? `${id.slice(0, 8)} —[${path_edge_types[i]}]→ ` : id.slice(0, 8),
+  ).join('');
 
-  const steps = path_item_ids.map((id, i) => {
-    const edge = path_edge_types[i] ? ` —[${path_edge_types[i]}]→ ` : (i < path_item_ids.length - 1 ? ' → ' : '');
-    return `${id.slice(0, 8)}${edge}`;
-  }).join('');
-
+  const path_length = path_item_ids.length - 1;
   const text = [
-    `Path found: length ${path_length ?? path_item_ids.length - 1}`,
+    `Path found: length ${path_length}`,
     '',
     steps,
     '',
@@ -59,11 +75,6 @@ export async function findPath(
 
   return {
     content: [{ type: 'text' as const, text }],
-    structuredContent: {
-      found: true,
-      path_item_ids,
-      path_edge_types,
-      path_length: path_length ?? path_item_ids.length - 1,
-    } as unknown as Record<string, unknown>,
+    structuredContent: { found: true, path_item_ids, path_edge_types, path_length } as unknown as Record<string, unknown>,
   };
 }

@@ -980,7 +980,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       outputSchema: findPathOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
-    (input) => findPath(input)
+    (input) => findPath(input, auth.userId)
   );
 
   server.registerTool(
