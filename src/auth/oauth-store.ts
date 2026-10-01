@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
 
 // ─── redirect_uri allowlist ───────────────────────────────────────────────────
 // Every entry is evaluated against the parsed, normalised URL
@@ -72,11 +72,18 @@ export function isRedirectUriAllowed(uri: string): boolean {
 }
 
 // ─── Registered OAuth clients (RFC 7591 dynamic client registration) ──────────
-// Stored in-memory — clients re-register each session, so loss on restart is fine.
-// Registration is unauthenticated (anyone can POST /oauth/register), so entries
-// are swept on a TTL the same way pendingAuths is, to bound memory growth from
-// anonymous registration spam. There is currently no admin list/revoke endpoint
-// for this store — see the CLIENT_TTL_MS comment below before adding one.
+// Stateless: the client_id itself carries the registered redirect URIs and name,
+// signed with HMAC-SHA256. A Railway redeploy or restart therefore no longer
+// forgets clients — before this, every deploy wiped the in-memory registry and
+// connectors (Claude, Cursor, …) had to be removed and re-added. Registration is
+// still unauthenticated, but it now stores nothing, so registration spam cannot
+// grow memory. Redirect URIs were validated at /oauth/register and are re-checked
+// at /oauth/authorize, so a valid signature can only ever name allowlisted URIs.
+//
+// Signing key: OAUTH_CLIENT_SIGNING_KEY when set, otherwise a key derived from
+// SUPABASE_SERVICE_ROLE_KEY. Changing the key invalidates every client_id
+// (users would re-add the connector), so set OAUTH_CLIENT_SIGNING_KEY before
+// rotating the Supabase key.
 
 export interface OAuthClient {
   clientId: string;
@@ -86,30 +93,65 @@ export interface OAuthClient {
   registeredAt: number;
 }
 
-const clients = new Map<string, OAuthClient>();
-const CLIENT_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — generous vs. "clients re-register each session"
+const CLIENT_ID_PREFIX = 'bt_client_v2.';
+let ephemeralKey: Buffer | undefined;
+
+function clientSigningKey(): Buffer {
+  const explicit = process.env.OAUTH_CLIENT_SIGNING_KEY;
+  if (explicit) return createHash('sha256').update(explicit).digest();
+  const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (service) return createHmac('sha256', service).update('braintube-oauth-client-id-v2').digest();
+  // No secret configured (local dev / tests): a per-process key.
+  ephemeralKey ??= randomBytes(32);
+  return ephemeralKey;
+}
+
+function sign(payload: string): string {
+  return createHmac('sha256', clientSigningKey()).update(payload).digest('base64url');
+}
 
 export function registerClient(redirectUris: string[], clientName: string): OAuthClient {
-  const cutoff = Date.now() - CLIENT_TTL_MS;
-  for (const [key, val] of clients) {
-    if (val.registeredAt < cutoff) clients.delete(key);
-  }
-
-  const clientId = `bt_client_${randomBytes(16).toString('hex')}`;
-  const clientSecret = randomBytes(32).toString('hex');
-  const client: OAuthClient = {
+  const registeredAt = Date.now();
+  const payload = Buffer.from(
+    JSON.stringify({ r: redirectUris, n: clientName.slice(0, 100), t: registeredAt }),
+  ).toString('base64url');
+  const clientId = `${CLIENT_ID_PREFIX}${payload}.${sign(payload)}`;
+  return {
     clientId,
-    clientSecret,
+    // client_secret is issued for RFC 7591 compliance; the token endpoint
+    // authenticates with PKCE (token_endpoint_auth_methods: none) instead.
+    clientSecret: sign(`secret:${clientId}`),
     redirectUris,
     clientName,
-    registeredAt: Date.now(),
+    registeredAt,
   };
-  clients.set(clientId, client);
-  return client;
 }
 
 export function getClient(clientId: string): OAuthClient | undefined {
-  return clients.get(clientId);
+  if (typeof clientId !== 'string' || !clientId.startsWith(CLIENT_ID_PREFIX)) return undefined;
+  const parts = clientId.slice(CLIENT_ID_PREFIX.length).split('.');
+  if (parts.length !== 2) return undefined;
+  const [payload, mac] = parts;
+
+  const expected = Buffer.from(sign(payload));
+  const given = Buffer.from(mac);
+  if (expected.length !== given.length || !timingSafeEqual(expected, given)) return undefined;
+
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
+      r?: unknown; n?: unknown; t?: unknown;
+    };
+    if (!Array.isArray(data.r) || !data.r.every((u) => typeof u === 'string')) return undefined;
+    return {
+      clientId,
+      clientSecret: sign(`secret:${clientId}`),
+      redirectUris: data.r as string[],
+      clientName: typeof data.n === 'string' ? data.n : 'MCP Client',
+      registeredAt: typeof data.t === 'number' ? data.t : 0,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 // ─── Pending authorize requests (state → PKCE params + meta) ─────────────────

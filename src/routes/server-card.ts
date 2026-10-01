@@ -63,6 +63,7 @@ import {
   firewallRollbackRulesSchema, firewallRollbackRulesOutputSchema,
   firewallRuleHistorySchema, firewallRuleHistoryOutputSchema,
 } from '../tools/firewall-admin.js';
+import { directoryMetaFor } from '../tool-annotations.js';
 import { connectReadwiseSchema, connectReadwiseOutputSchema, syncReadwiseSchema, syncReadwiseOutputSchema } from '../tools/readwise.js';
 import {
   ingestNotionPageSchema, ingestNotionPageOutputSchema,
@@ -117,7 +118,7 @@ export interface ToolAnnotations {
   openWorldHint?: boolean;
 }
 
-export const TOOLS = [
+const CARD_TOOLS = [
   {
     name: 'search_knowledge',
     description: 'Full-text search over your personal BrainTube knowledge corpus. Searches across YouTube, Instagram, web, LinkedIn, GitHub, Twitter and more. Hybrid ranking (semantic + keyword, reciprocal-rank fusion); Bulgarian/Cyrillic queries are also searched in English.',
@@ -485,6 +486,13 @@ export const TOOLS = [
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
 ];
+
+// Titles and behaviour hints come from the same map server.ts applies at
+// registration, so the public card and the live tools/list cannot drift.
+export const TOOLS = CARD_TOOLS.map((tool) => {
+  const meta = directoryMetaFor(tool.name);
+  return meta ? { ...tool, title: meta.title, annotations: meta.annotations } : tool;
+});
 
 export const serverCardRouter = Router();
 

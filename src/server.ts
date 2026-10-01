@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
+import { directoryMetaFor } from './tool-annotations.js';
 import { searchSchema, searchKnowledge, searchKnowledgeOutputSchema } from './tools/search.js';
 import { videoSchema, getVideo, getVideoOutputSchema } from './tools/video.js';
 import { recentSchema, listRecent, listRecentOutputSchema } from './tools/recent.js';
@@ -231,7 +232,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
         auditLog(auth.userId, toolName, input, false);
         return shortCircuitResult(
           'access_denied',
-          `[ACCESS DENIED] Tool \`${toolName}\` requires \`${requiredTier}\` access. Your role: \`${userRole}\`. Please upgrade your BrainTube plan to use this tool.`
+          `[ACCESS DENIED] Tool \`${toolName}\` requires \`${requiredTier}\` access. Your role: \`${userRole}\`. This tool is reserved for BrainTube administrators.`
         );
       }
 
@@ -334,6 +335,20 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
 
     let securedDef = def;
 
+    // ── Directory title + behaviour hints (src/tool-annotations.ts) ──────────
+    // The central map wins over any inline annotations so every tool carries a
+    // title and an explicit readOnly/destructive hint.
+    const directoryMeta = directoryMetaFor(name);
+    if (directoryMeta) {
+      securedDef = {
+        ...securedDef,
+        title: directoryMeta.title,
+        annotations: { ...(def?.annotations ?? {}), ...directoryMeta.annotations },
+      };
+    } else {
+      console.warn(`[annotations] tool "${name}" has no entry in TOOL_ANNOTATIONS`);
+    }
+
     // ── Sanitize tool description ────────────────────────────────────────────
     if (def?.description) {
       const sanitized = sanitizeToolDescription(def.description);
@@ -425,7 +440,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'get_stats',
     {
-      description: 'Get your personal corpus statistics: total items saved, breakdown by source type (youtube/instagram/web/etc), taint distribution. Call this before searching to understand what knowledge is available.',
+      description: 'Get your personal corpus statistics: total items saved, breakdown by source type (youtube/instagram/web/etc), taint distribution. Useful for understanding what knowledge is available before searching.',
       inputSchema: statsSchema,
       outputSchema: getStatsOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
@@ -438,7 +453,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'get_related',
     {
-      description: 'Find items semantically similar to a given item using vector similarity. Useful for discovering related concepts, follow-up research, or building knowledge clusters. Requires embeddings — run backfill_embeddings first if results are empty.',
+      description: 'Find items semantically similar to a given item using vector similarity. Useful for discovering related concepts, follow-up research, or building knowledge clusters. Returns an empty list when the item has no embedding yet.',
       inputSchema: relatedSchema,
       outputSchema: getRelatedOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
@@ -556,7 +571,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'add_note',
     {
-      description: 'Write a note or AI-generated synthesis back to a specific item in your corpus. No write_token needed — your JWT proves ownership. Ownership is verified server-side.',
+      description: 'Save a note or AI-generated synthesis on one of your saved items. Each item holds one note; saving again replaces it. Only items you own can be annotated.',
       inputSchema: noteSchema,
       outputSchema: addNoteOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
@@ -594,7 +609,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'get_session_brief',
     {
-      description: 'One-shot session bootstrap: combines expertise profile, last 5 AI conversations, and corpus stats into a single JSON object. Call this at the start of a session to load full context without multiple round-trips.',
+      description: 'One-shot session bootstrap: combines expertise profile, last 5 AI conversations, and corpus stats into a single JSON object. Useful at the start of a session to load context in one call.',
       inputSchema: sessionBriefSchema,
       outputSchema: getSessionBriefOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
@@ -756,7 +771,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'search_obsidian',
     {
-      description: 'Search your local Obsidian vault via the Obsidian Local REST API plugin (exposed through Tailscale). Returns matching notes with title, file path, and a text excerpt. Requires OBSIDIAN_BRIDGE_URL and OBSIDIAN_API_KEY set in Railway env vars.',
+      description: 'Search the Obsidian vault connected to this BrainTube deployment through its private bridge. Returns matching notes with title, file path, and a text excerpt. Available to administrators only.',
       inputSchema: searchObsidianSchema,
       outputSchema: searchObsidianOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
@@ -840,7 +855,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'compile_knowledge',
     {
-      description: 'Invoke the compile-knowledge edge function to generate concept articles from a topic cluster or Brain. Synthesises saved items into structured wiki-style articles with backlinks and knowledge graph edges. Pass either cluster_id or brain_id.',
+      description: 'Generate concept articles from a topic cluster or Brain. Synthesises saved items into structured wiki-style articles with backlinks and knowledge graph edges. Pass either cluster_id or brain_id.',
       inputSchema: compileKnowledgeSchema,
       outputSchema: compileKnowledgeOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
@@ -924,7 +939,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'recompute_salience',
     {
-      description: 'Trigger a salience score recompute across your corpus via the compute_salience_scores RPC. Use this after bulk ingests or to refresh rankings. Returns { updated_count }.',
+      description: 'Recompute salience (importance) scores across your corpus, replacing the previous scores. Useful after large imports. Returns { updated_count }.',
       inputSchema: recomputeSalienceSchema,
       outputSchema: recomputeSalienceOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
@@ -971,7 +986,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'compute_centrality',
     {
-      description: 'Trigger an on-demand recompute of graph centrality scores across your corpus via compute_centrality_scores RPC. Run after adding new knowledge edges or after compile_knowledge. Returns { updated_count }.',
+      description: 'Recompute graph centrality scores across your corpus, replacing the previous scores. Useful after new connections or concept articles are added. Returns { updated_count }.',
       inputSchema: computeCentralitySchema,
       outputSchema: computeCentralityOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }

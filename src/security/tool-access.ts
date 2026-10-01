@@ -37,7 +37,7 @@ export function tierGrantsAccess(userRole: UserRole, requiredTier: ToolTier): bo
 }
 
 // ─── Tool access map ──────────────────────────────────────────────────────────
-// All 45 registered tools.  Any tool NOT listed here defaults to 'authenticated'.
+// Every registered tool should be listed. Any tool NOT listed here defaults to 'authenticated'.
 
 export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   // ── Authenticated (safe read-only — available to every logged-in user) ─────
@@ -52,7 +52,6 @@ export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   random_resurface:       'authenticated',
   get_recent_conversations: 'authenticated',
   get_session_brief:      'authenticated',
-  search_obsidian:        'authenticated',
   chat_with_brain:        'authenticated',
   list_brains:            'authenticated',
   get_knowledge_graph:    'authenticated',
@@ -68,19 +67,28 @@ export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   find_path:              'authenticated',
   get_edge_history:       'authenticated',
 
-  // ── Premium (write operations + advanced features) ────────────────────────
-  tag_item:               'premium',
-  toggle_bookmark:        'premium',
-  add_note:               'premium',
-  ingest_content:         'premium',
-  ingest_notion_page:     'premium',
-  compile_knowledge:      'premium',
-  set_notion_api_key:     'premium',
-  get_expertise_profile:  'premium',
-  export_corpus:          'premium',
-  export_claude_md:       'premium',
+  // ── User write tools (every signed-in user; usage is metered by credits) ──
+  // These were 'premium', but no account holds a premium role — user_roles
+  // only stores admin / moderator / user — so the write half of the connector
+  // was invisible to everyone but the admin. MCP has no paid gate (pricing:
+  // Free = 30 credits a month, saving free, reads metered).
+  tag_item:               'authenticated',
+  toggle_bookmark:        'authenticated',
+  add_note:               'authenticated',
+  ingest_content:         'authenticated',
+  ingest_notion_page:     'authenticated',
+  compile_knowledge:      'authenticated',
+  set_notion_api_key:     'authenticated',
+  connect_readwise:       'authenticated',
+  sync_readwise:          'authenticated',
+  get_expertise_profile:  'authenticated',
+  export_corpus:          'authenticated',
+  export_claude_md:       'authenticated',
 
   // ── Admin (destructive / system-level operations) ─────────────────────────
+  // search_obsidian reads one server-wide bridge (OBSIDIAN_BRIDGE_URL), i.e.
+  // the operator's own vault — it must never be visible to other users.
+  search_obsidian:                'admin',
   bulk_ingest:                    'admin',
   ingest_notion_database:         'admin',
   backfill_embeddings:            'admin',

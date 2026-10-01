@@ -20,6 +20,7 @@ import { buildOpenApiSpec } from './routes/openapi.js';
 import { ingestContent } from './tools/ingest.js';
 import { summariseConversation } from './tools/summarise.js';
 import { backfillEmbeddings } from './tools/embedding.js';
+import { validateMcpOrigin } from './security/origin.js';
 import type { AuthContext } from './types.js';
 
 // Resolve package.json relative to this file so /health reports the actual
@@ -150,6 +151,9 @@ setInterval(() => {
 }, 60 * 60 * 1000).unref();
 
 // ─── MCP endpoints ────────────────────────────────────────────────────────────
+
+// Origin validation (DNS-rebinding guard) runs before auth on every /mcp method.
+app.use('/mcp', validateMcpOrigin);
 
 app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
   const auth = (req as express.Request & { auth: AuthContext }).auth;
