@@ -10,6 +10,9 @@
  * file to confirm the two surfaces haven't drifted apart.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
@@ -494,13 +497,18 @@ export const TOOLS = CARD_TOOLS.map((tool) => {
   return meta ? { ...tool, title: meta.title, annotations: meta.annotations } : tool;
 });
 
+// Report the shipped version (src/routes or dist/routes → repo root is two levels up).
+const PKG_VERSION = (JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'package.json'), 'utf8'),
+) as { version: string }).version;
+
 export const serverCardRouter = Router();
 
 serverCardRouter.get('/.well-known/mcp/server-card.json', (_req: Request, res: Response) => {
   res.json({
     serverInfo: {
       name: 'BrainTube',
-      version: '3.12.4',
+      version: PKG_VERSION,
     },
     homepage: 'https://brain-tube.com',
     authentication: {

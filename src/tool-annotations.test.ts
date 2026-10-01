@@ -92,3 +92,11 @@ test('tool descriptions do not instruct Claude how to behave', () => {
     assert.doesNotMatch(d, /\bCall this\b|\brun backfill_embeddings first\b|Railway env|write_token/i, d.slice(0, 80));
   }
 });
+
+test('server.json and the server card report the package version', () => {
+  const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')) as { version: string };
+  const manifest = JSON.parse(readFileSync(join(here, '..', 'server.json'), 'utf8')) as { version: string };
+  assert.equal(manifest.version, pkg.version);
+  const card = readFileSync(join(here, 'routes', 'server-card.ts'), 'utf8');
+  assert.doesNotMatch(card, /version:\s*'\d+\.\d+\.\d+'/);
+});
