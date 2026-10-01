@@ -3,14 +3,17 @@
  * servers MUST validate the Origin header to prevent DNS-rebinding attacks;
  * also a requirement of the Anthropic Connectors Directory).
  *
- * Server-to-server callers — Claude.ai / Claude Desktop connectors (which call
- * from Anthropic's cloud), Cursor, CLI clients — send no Origin header and are
- * unaffected. A request that DOES carry an Origin is accepted only when that
+ * Server-to-server callers — Cursor, CLI clients — send no Origin header and are
+ * unaffected. Claude connectors call through Anthropic's MCP proxy, which can
+ * send an anthropic.com / claude.ai origin, so those domains are allowlisted
+ * (3.14.0 shipped without anthropic.com and broke Claude connections). A request that DOES carry an Origin is accepted only when that
  * origin is on the allowlist below; everything else gets 403.
  */
 
 const EXACT_ORIGINS = new Set([
   'https://claude.ai',
+  'https://anthropic.com',
+  'https://www.anthropic.com',
   'https://claude.com',
   'https://www.claude.com',
   'https://brain-tube.com',
@@ -20,7 +23,7 @@ const EXACT_ORIGINS = new Set([
 ]);
 
 /** Host suffixes allowed over https (subdomains only, never look-alikes). */
-const HTTPS_SUFFIXES = ['.claude.ai', '.claude.com', '.brain-tube.com'];
+const HTTPS_SUFFIXES = ['.claude.ai', '.claude.com', '.anthropic.com', '.brain-tube.com'];
 
 /** Non-web schemes used by browser extensions and desktop apps (Electron, Tauri). */
 const APP_SCHEMES = new Set([

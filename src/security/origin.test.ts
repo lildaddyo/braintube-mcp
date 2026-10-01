@@ -11,6 +11,7 @@ test('Claude and BrainTube web origins are allowed', () => {
   for (const o of [
     'https://claude.ai', 'https://claude.com', 'https://www.claude.com', 'https://chat.claude.ai',
     'https://brain-tube.com', 'https://app.brain-tube.com',
+    'https://anthropic.com', 'https://mcp-proxy.anthropic.com', 'https://api.anthropic.com',
   ]) {
     assert.equal(isAllowedOrigin(o), true, o);
   }
@@ -27,7 +28,7 @@ test('extensions, desktop apps and loopback tools (MCP Inspector) are allowed', 
 
 test('unknown and look-alike origins are rejected', () => {
   for (const o of [
-    'https://evil.com', 'https://claude.ai.evil.com', 'https://evilclaude.ai', 'https://notbrain-tube.com',
+    'https://evil.com', 'https://claude.ai.evil.com', 'https://evilclaude.ai', 'https://notbrain-tube.com', 'https://evilanthropic.com', 'https://anthropic.com.evil.io',
     'http://claude.ai', 'https://claude.ai:8443', 'null', 'https://192.168.1.10', 'http://attacker.localhost.evil',
   ]) {
     assert.equal(isAllowedOrigin(o), false, o);
