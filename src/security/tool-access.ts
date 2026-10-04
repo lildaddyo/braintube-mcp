@@ -76,6 +76,9 @@ export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   toggle_bookmark:        'authenticated',
   add_note:               'authenticated',
   ingest_content:         'authenticated',
+  // bulk_ingest writes only to the caller's own corpus, is capped at 50 items
+  // per call and 500 new items per user per day, and needs confirm:true.
+  bulk_ingest:            'authenticated',
   ingest_notion_page:     'authenticated',
   compile_knowledge:      'authenticated',
   set_notion_api_key:     'authenticated',
@@ -89,7 +92,6 @@ export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   // search_obsidian reads one server-wide bridge (OBSIDIAN_BRIDGE_URL), i.e.
   // the operator's own vault — it must never be visible to other users.
   search_obsidian:                'admin',
-  bulk_ingest:                    'admin',
   ingest_notion_database:         'admin',
   backfill_embeddings:            'admin',
   recompute_salience:             'admin',
