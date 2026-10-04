@@ -42,7 +42,11 @@ const INJECTION_PATTERNS: RegExp[] = [
   /\bDAN\s*[:|-]/i,                             // "DAN:" jailbreak prefix
   /\[SYSTEM\]/i,
   /<\|?(system|im_start|im_end)\|?>/i,          // ChatML / special token injection
-  /\bjailbreak\b/i,
+  // Jailbreak *instructions*, not the topic: a bare /\bjailbreak\b/ blocked ordinary
+  // library searches such as "what did I save about jailbreak research" (EN and BG).
+  /\b(enable|activate|enter|engage|switch\s+(on|to)|turn\s+on)\s+(the\s+)?(jailbreak|jailbroken|dan|developer)\s+mode\b/i,
+  /\bjailbreak(ed)?\s+(mode|prompt)\s*[:\-]/i,
+  /\byou\s+are\s+(now\s+)?jailbroken\b/i,
 
   // Data exfiltration probes
   /\b(print|output|reveal|show|display|repeat|echo)\s+(your\s+)?(system\s+prompt|instructions?|api\s+key|secret|token|password)\b/i,
