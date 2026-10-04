@@ -67,6 +67,7 @@ import {
   firewallRuleHistorySchema, firewallRuleHistoryOutputSchema,
 } from '../tools/firewall-admin.js';
 import { directoryMetaFor } from '../tool-annotations.js';
+import { getRequiredTier } from '../security/tool-access.js';
 import { connectReadwiseSchema, connectReadwiseOutputSchema, syncReadwiseSchema, syncReadwiseOutputSchema } from '../tools/readwise.js';
 import {
   ingestNotionPageSchema, ingestNotionPageOutputSchema,
@@ -497,6 +498,14 @@ export const TOOLS = CARD_TOOLS.map((tool) => {
   return meta ? { ...tool, title: meta.title, annotations: meta.annotations } : tool;
 });
 
+// The public card is what anonymous directory scanners (Smithery, Glama…) see,
+// so it lists only tools an ordinary signed-in user gets in tools/list.
+// Admin-tier tools are skipped at registration for non-admin sessions
+// (server.ts registerTool proxy) and must not be advertised here either.
+// TOOLS stays complete so scripts/verify-server-card-parity.ts still checks
+// every runtime tool against its card entry.
+export const PUBLIC_TOOLS = TOOLS.filter((tool) => getRequiredTier(tool.name) !== 'admin');
+
 // Report the shipped version (src/routes or dist/routes → repo root is two levels up).
 const PKG_VERSION = (JSON.parse(
   readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'package.json'), 'utf8'),
@@ -515,7 +524,7 @@ serverCardRouter.get('/.well-known/mcp/server-card.json', (_req: Request, res: R
       required: true,
       schemes: ['oauth2'],
     },
-    tools: TOOLS,
+    tools: PUBLIC_TOOLS,
     resources: [],
     prompts: [],
   });
