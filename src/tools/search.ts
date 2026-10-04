@@ -86,11 +86,12 @@ async function jevRerank(query: string, rows: AdaptiveResult[], windowSize = 10)
       console.error('[jev-rerank] skipped: scores do not cover every passage id');
       return rows;
     }
+    // Keep the score on each re-ranked row (relevance_score) so callers - and the low-confidence flag below - can use it.
     const ordered = top
       .map((r, i) => ({ r, i, s: scoreById.get(r.id) as number }))
       .sort((a, b) => (b.s - a.s) || (a.i - b.i))
-      .map(x => x.r);
-    const moved = ordered.filter((r, i) => r !== top[i]).length;
+      .map(x => ({ ...x.r, relevance_score: Math.round(x.s * 1000) / 1000 }) as AdaptiveResult);
+    const moved = ordered.filter((r, i) => r.id !== top[i].id).length;
     console.error(`[jev-rerank] top ${top.length} re-ranked (model=${String(data.model ?? '?').slice(0, 40)}, ms=${Number(data.ms) || '?'}, moved=${moved})`);
     return [...ordered, ...rows.slice(windowSize)];
   } catch (err) {
@@ -178,7 +179,32 @@ export const searchSchema = z.object({
   )
 });
 
-export const searchKnowledgeOutputSchema = taintedListSchema(looseItemSchema);
+// Low-confidence flag (retrieval QA 2026-10-04): when the best JEV relevance score is below the threshold, none of the
+// results is likely to answer the query (the library may not contain it). Results are NEVER dropped - only flagged.
+// Default 0.6 separated answerable from unanswerable benchmark queries (AUROC 0.97 on the summary-view score); it was
+// chosen on the whole benchmark, so recalibrate on real traffic. Env: SEARCH_LOW_CONFIDENCE_THRESHOLD (number, or 'off').
+export function lowConfidenceThreshold(): number | null {
+  const raw = process.env.SEARCH_LOW_CONFIDENCE_THRESHOLD;
+  if (raw === 'off') return null;
+  const n = raw === undefined ? 0.6 : Number(raw);
+  return Number.isFinite(n) ? n : 0.6;
+}
+
+/** Confidence summary for a re-ranked result list; null when the top row was not scored (fail-open / no rerank). */
+export function confidenceOf(rows: Array<{ relevance_score?: number | null }>): { top_relevance: number; low_confidence: boolean; threshold: number } | null {
+  const threshold = lowConfidenceThreshold();
+  const top = rows[0]?.relevance_score;
+  if (threshold === null || typeof top !== 'number' || !Number.isFinite(top)) return null;
+  return { top_relevance: top, low_confidence: top < threshold, threshold };
+}
+
+export const searchKnowledgeOutputSchema = taintedListSchema(looseItemSchema).extend({
+  confidence: z.object({
+    top_relevance: z.number(),
+    low_confidence: z.boolean(),
+    threshold: z.number(),
+  }).optional(),
+});
 
 export async function searchKnowledge(input: z.infer<typeof searchSchema>, userId: string) {
   const { query, limit } = input;
@@ -239,9 +265,13 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
           centrality_score: r.centrality_score ?? null,
         }));
         const tainted = wrapWithTaint(withMatchType);
+        const confidence = confidenceOf(results as Array<{ relevance_score?: number | null }>);
+        const note = confidence?.low_confidence
+          ? `[Low confidence] None of these results looks like a direct answer (top relevance ${confidence.top_relevance.toFixed(2)} < ${confidence.threshold}). Your library may not contain this.\n\n`
+          : '';
         return {
-          content: [{ type: 'text' as const, text: formatTaintedResponse(tainted) }],
-          structuredContent: tainted as unknown as Record<string, unknown>
+          content: [{ type: 'text' as const, text: note + formatTaintedResponse(tainted) }],
+          structuredContent: (confidence ? { ...tainted, confidence } : tainted) as unknown as Record<string, unknown>
         };
       }
       console.error('[search] adaptive returned 0 results, falling back to keyword');
