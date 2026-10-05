@@ -4,8 +4,9 @@
  *
  * Asserts, for every tool:
  *   1. The tool name set is identical between both surfaces (52 == 52).
- *   2. The `annotations` object registered at runtime deep-equals the
- *      `annotations` object shipped in the static server-card TOOLS array.
+ *   2. The `annotations` object served at runtime (the inline literal with
+ *      the src/tool-annotations.ts entry applied on top, as the registerTool
+ *      proxy does) deep-equals the `annotations` in the server-card TOOLS array.
  *   3. Every property in the tool's JSON input schema has a non-empty
  *      `description` string.
  *   4. `outputSchema` is declared at runtime (server.ts) AND on the static
@@ -52,6 +53,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { TOOLS } from '../src/routes/server-card.js';
+import { directoryMetaFor } from '../src/tool-annotations.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -205,10 +207,16 @@ function main() {
   // ── 2, 3, 4 & 5. Per-tool checks ──────────────────────────────────────────
   for (const tool of TOOLS) {
     const runtimeMeta = runtimeToolMeta.get(tool.name);
-    if (runtimeMeta && !deepEqual(runtimeMeta.annotations, tool.annotations)) {
+    // server.ts's registerTool proxy overrides the inline literal with the
+    // central TOOL_ANNOTATIONS entry (title + hints), so compare what is
+    // actually served: { ...inline, ...directoryMetaFor(name).annotations }.
+    const servedAnnotations = runtimeMeta
+      ? { ...runtimeMeta.annotations, ...(directoryMetaFor(tool.name)?.annotations ?? {}) }
+      : undefined;
+    if (runtimeMeta && !deepEqual(servedAnnotations, tool.annotations)) {
       failures.push(
         `ANNOTATIONS MISMATCH: "${tool.name}"\n` +
-        `  server.ts:      ${JSON.stringify(runtimeMeta.annotations)}\n` +
+        `  server.ts:      ${JSON.stringify(servedAnnotations)}\n` +
         `  server-card.ts: ${JSON.stringify(tool.annotations)}`
       );
     }
