@@ -13,6 +13,9 @@ const EXACT_REDIRECT_URIS = new Set([
   'https://claude.ai/api/mcp/auth_callback',
   'https://claude.com/api/mcp/auth_callback', // Anthropic's newer domain — keep in sync with claude.ai
   'https://smithery.run/oauth/callback',
+  // ChatGPT's stable callback, used when the server advertises issuer
+  // identification (and by legacy connectors). developers.openai.com/plugins/build/auth
+  'https://chatgpt.com/connector_platform_oauth_redirect',
 ]);
 
 // TODO: confirm exact callback paths for these and move them into
@@ -26,6 +29,9 @@ const REDIRECT_URI_GLOB_ALLOWLIST = [
   'https://*.cursor.sh/**',
   'https://codeium.com/**',
   'https://*.windsurf.dev/**',
+  // ChatGPT without issuer identification: one callback per connection,
+  // https://chatgpt.com/connector/oauth/{callback_id}. Single segment only.
+  'https://chatgpt.com/connector/oauth/*',
 ];
 
 // URL.hostname keeps the brackets on IPv6 literals.

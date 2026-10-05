@@ -297,3 +297,19 @@ test('unknown and legacy client_id shapes are rejected', () => {
     assert.equal(getClient(id), undefined, id);
   }
 });
+
+test('accepts ChatGPT connector callbacks (stable and per-connection)', () => {
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com/connector_platform_oauth_redirect'), true);
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com/connector/oauth/abc123XYZ'), true);
+});
+
+test('rejects other paths and hosts around the ChatGPT callbacks', () => {
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com/connector/oauth/abc/extra'), false);
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com/evil'), false);
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com/connector_platform_oauth_redirect/x'), false);
+  assert.equal(isRedirectUriAllowed('https://evil.chatgpt.com/connector/oauth/abc'), false);
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com.evil.com/connector/oauth/abc'), false);
+  assert.equal(isRedirectUriAllowed('http://chatgpt.com/connector/oauth/abc'), false);
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com/connector/oauth/abc?x=1'), false);
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com@evil.com/connector/oauth/abc'), false);
+});
