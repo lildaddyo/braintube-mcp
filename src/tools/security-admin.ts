@@ -105,7 +105,7 @@ export async function securityDashboard(
 // ── acknowledge_security_alert ────────────────────────────────────────────────
 
 export const acknowledgeAlertSchema = z.object({
-  alert_id: z.string().uuid().describe('UUID of the alert to acknowledge'),
+  alert_id: z.string().guid().describe('UUID of the alert to acknowledge'),
   notes:    z.string().optional().describe('Resolution notes'),
 });
 

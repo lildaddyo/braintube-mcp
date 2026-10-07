@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { dbAdmin, linkTags } from '../db/supabase.js';
 
 export const tagItemSchema = z.object({
-  item_id: z.string().uuid().describe('UUID of the item to tag'),
+  item_id: z.string().guid().describe('UUID of the item to tag'),
   add: z.array(z.string().min(1).max(50)).default([]).describe('Tags to add (e.g. ["ai", "productivity"])'),
   remove: z.array(z.string().min(1).max(50)).default([]).describe('Tags to remove')
 });

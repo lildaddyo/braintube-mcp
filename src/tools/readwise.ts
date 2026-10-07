@@ -28,7 +28,7 @@ export async function connectReadwise(
   });
 
   const data = await res.json().catch(() => ({ error: 'Invalid JSON response' }));
-  if (!res.ok) throw new Error(`connect_readwise: ${data?.error ?? res.statusText}`);
+  if (!res.ok) throw new Error(`Could not connect Readwise: ${data?.error ?? res.statusText}. Check the token at readwise.io/access_token.`);
 
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(data) }],
@@ -61,7 +61,13 @@ export async function syncReadwise(
   });
 
   const data = await res.json().catch(() => ({ error: 'Invalid JSON response' }));
-  if (!res.ok) throw new Error(`sync_readwise: ${data?.error ?? res.statusText}`);
+  if (!res.ok) {
+    const reason = String(data?.error ?? res.statusText);
+    if (/not connected/i.test(reason)) {
+      throw new Error('Readwise is not connected for this account yet. Connect it first with connect_readwise, using the access token from readwise.io/access_token.');
+    }
+    throw new Error(`Readwise sync failed: ${reason}`);
+  }
 
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(data) }],

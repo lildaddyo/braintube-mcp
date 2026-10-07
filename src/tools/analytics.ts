@@ -118,9 +118,21 @@ export async function detectGaps(_input: z.infer<typeof detectGapsSchema>, userI
     `Unconnected items:        ${Array.isArray(d.unconnected_items) ? d.unconnected_items.length : d.unconnected_items ?? 0}`,
   ];
 
+  // The RPC returns null (not []) for an empty category; the output schema
+  // declares arrays, so normalise or the SDK rejects the whole result.
+  const asArray = (v: unknown) => (Array.isArray(v) ? v : []);
+  const structured = {
+    ...d,
+    thin_topics: asArray(d.thin_topics),
+    entities_without_depth: asArray(d.entities_without_depth),
+    stale_high_value: asArray(d.stale_high_value),
+    missing_concept_articles: asArray(d.missing_concept_articles),
+    unconnected_items: asArray(d.unconnected_items),
+  };
+
   return {
     content: [{ type: 'text' as const, text: lines.join('\n') }],
-    structuredContent: d as unknown as Record<string, unknown>,
+    structuredContent: structured as unknown as Record<string, unknown>,
   };
 }
 

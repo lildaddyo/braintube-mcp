@@ -23,19 +23,36 @@ export interface AuthContext {
   rawToken?: string; // original JWT — forwarded to edge functions that require user auth
 }
 
-// Validate a Supabase JWT via the Auth API (no local JWT secret needed)
+// Validate a Supabase JWT via the Auth API (no local JWT secret needed).
+//
+// Calls GET {SUPABASE_URL}/auth/v1/user directly instead of
+// supabase-js auth.getUser(): after the 2.101 → 2.117 bump (PR #28) getUser
+// rejected every valid access token, so every MCP request 401'd and Claude
+// connectors showed "Authentication failed". The REST endpoint is the
+// contract getUser wraps, so this keeps auth independent of client versions.
 async function validateJWT(token: string): Promise<AuthContext | null> {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const apiKey = process.env.SUPABASE_ANON_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !apiKey) return null;
   try {
-    const { data, error } = await getAdminClient().auth.getUser(token);
-    if (error || !data.user) return null;
-    console.error(`[auth] jwt validated — email: ${data.user.email}`);
+    const resp = await fetch(`${supabaseUrl.replace(/\/$/, '')}/auth/v1/user`, {
+      headers: { apikey: apiKey, Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) {
+      console.warn(`[auth] jwt rejected by Supabase — status ${resp.status}`);
+      return null;
+    }
+    const user = (await resp.json()) as { id?: string; email?: string };
+    if (!user?.id) return null;
+    console.error(`[auth] jwt validated — email: ${user.email}`);
     return {
-      userId: data.user.id,
-      email: data.user.email,
+      userId: user.id,
+      email: user.email,
       authMethod: 'jwt',
       rawToken: token,
     };
-  } catch {
+  } catch (err) {
+    console.error('[auth] jwt validation error:', err);
     return null;
   }
 }
