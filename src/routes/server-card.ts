@@ -10,6 +10,9 @@
  * file to confirm the two surfaces haven't drifted apart.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
@@ -63,6 +66,8 @@ import {
   firewallRollbackRulesSchema, firewallRollbackRulesOutputSchema,
   firewallRuleHistorySchema, firewallRuleHistoryOutputSchema,
 } from '../tools/firewall-admin.js';
+import { directoryMetaFor } from '../tool-annotations.js';
+import { getRequiredTier } from '../security/tool-access.js';
 import { connectReadwiseSchema, connectReadwiseOutputSchema, syncReadwiseSchema, syncReadwiseOutputSchema } from '../tools/readwise.js';
 import {
   ingestNotionPageSchema, ingestNotionPageOutputSchema,
@@ -117,7 +122,7 @@ export interface ToolAnnotations {
   openWorldHint?: boolean;
 }
 
-export const TOOLS = [
+const CARD_TOOLS = [
   {
     name: 'search_knowledge',
     description: 'Full-text search over your personal BrainTube knowledge corpus. Searches across YouTube, Instagram, web, LinkedIn, GitHub, Twitter and more. Hybrid ranking (semantic + keyword, reciprocal-rank fusion); Bulgarian/Cyrillic queries are also searched in English.',
@@ -486,20 +491,40 @@ export const TOOLS = [
   },
 ];
 
+// Titles and behaviour hints come from the same map server.ts applies at
+// registration, so the public card and the live tools/list cannot drift.
+export const TOOLS = CARD_TOOLS.map((tool) => {
+  const meta = directoryMetaFor(tool.name);
+  return meta ? { ...tool, title: meta.title, annotations: meta.annotations } : tool;
+});
+
+// The public card is what anonymous directory scanners (Smithery, Glama…) see,
+// so it lists only tools an ordinary signed-in user gets in tools/list.
+// Admin-tier tools are skipped at registration for non-admin sessions
+// (server.ts registerTool proxy) and must not be advertised here either.
+// TOOLS stays complete so scripts/verify-server-card-parity.ts still checks
+// every runtime tool against its card entry.
+export const PUBLIC_TOOLS = TOOLS.filter((tool) => getRequiredTier(tool.name) !== 'admin');
+
+// Report the shipped version (src/routes or dist/routes → repo root is two levels up).
+const PKG_VERSION = (JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'package.json'), 'utf8'),
+) as { version: string }).version;
+
 export const serverCardRouter = Router();
 
 serverCardRouter.get('/.well-known/mcp/server-card.json', (_req: Request, res: Response) => {
   res.json({
     serverInfo: {
       name: 'BrainTube',
-      version: '3.12.4',
+      version: PKG_VERSION,
     },
     homepage: 'https://brain-tube.com',
     authentication: {
       required: true,
       schemes: ['oauth2'],
     },
-    tools: TOOLS,
+    tools: PUBLIC_TOOLS,
     resources: [],
     prompts: [],
   });

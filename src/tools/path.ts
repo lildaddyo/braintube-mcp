@@ -17,40 +17,76 @@ export const findPathOutputSchema = z.object({
 });
 
 export async function findPath(
-  input: z.infer<typeof findPathSchema>
+  input: z.infer<typeof findPathSchema>,
+  userId: string,
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
   const { item_a, item_b, max_depth } = input;
 
-  const { data, error } = await dbAdmin.rpc('find_shortest_path', {
-    start_id:  item_a,
-    end_id:    item_b,
-    max_depth,
-  });
+  // Breadth-first search over the caller's knowledge_edges, both directions.
+  // (The find_shortest_path RPC is broken in the database: its recursive CTE
+  // references itself in the non-recursive term, so Postgres rejects it.)
+  type Edge = { source_id: string; target_id: string; edge_type: string };
+  const prev = new Map<string, { from: string; edgeType: string }>();
+  const seen = new Set<string>([item_a]);
+  let frontier: string[] = [item_a];
+  let found = item_a === item_b;
+  const MAX_FRONTIER = 200;
 
-  if (error) throw new Error(`find_shortest_path RPC failed: ${error.message}`);
+  for (let depth = 0; depth < max_depth && !found && frontier.length > 0; depth++) {
+    const ids = frontier.slice(0, MAX_FRONTIER);
+    const list = ids.join(',');
+    const { data, error } = await dbAdmin
+      .from('knowledge_edges')
+      .select('source_id, target_id, edge_type')
+      .eq('user_id', userId)
+      .or(`source_id.in.(${list}),target_id.in.(${list})`)
+      .limit(5000);
+    if (error) throw new Error(`Path search failed: ${error.message}`);
 
-  const result = data as {
-    path_item_ids?: string[];
-    path_edge_types?: string[];
-    path_length?: number;
-  } | null;
+    const inFrontier = new Set(ids);
+    const next: string[] = [];
+    for (const e of (data ?? []) as Edge[]) {
+      for (const [from, to] of [[e.source_id, e.target_id], [e.target_id, e.source_id]] as const) {
+        if (!inFrontier.has(from) || seen.has(to)) continue;
+        seen.add(to);
+        prev.set(to, { from, edgeType: String(e.edge_type) });
+        next.push(to);
+        if (to === item_b) found = true;
+      }
+    }
+    frontier = next;
+  }
 
-  if (!result || !result.path_item_ids?.length) {
+  const path_item_ids: string[] = [];
+  const path_edge_types: string[] = [];
+  let current = item_a;
+  if (found && item_a !== item_b) {
+    let node = item_b;
+    path_item_ids.unshift(node);
+    while (node !== item_a) {
+      const step = prev.get(node);
+      if (!step) break;
+      path_edge_types.unshift(step.edgeType);
+      node = step.from;
+      path_item_ids.unshift(node);
+    }
+    current = item_b;
+  }
+
+  if (current !== item_b || path_item_ids.length < 2) {
     return {
       content: [{ type: 'text' as const, text: `No path found between ${item_a.slice(0, 8)} and ${item_b.slice(0, 8)} within depth ${max_depth}.` }],
       structuredContent: { found: false, path_item_ids: [], path_edge_types: [], path_length: null },
     };
   }
 
-  const { path_item_ids, path_edge_types = [], path_length } = result;
+  const steps = path_item_ids.map((id, i) =>
+    i < path_edge_types.length ? `${id.slice(0, 8)} —[${path_edge_types[i]}]→ ` : id.slice(0, 8),
+  ).join('');
 
-  const steps = path_item_ids.map((id, i) => {
-    const edge = path_edge_types[i] ? ` —[${path_edge_types[i]}]→ ` : (i < path_item_ids.length - 1 ? ' → ' : '');
-    return `${id.slice(0, 8)}${edge}`;
-  }).join('');
-
+  const path_length = path_item_ids.length - 1;
   const text = [
-    `Path found: length ${path_length ?? path_item_ids.length - 1}`,
+    `Path found: length ${path_length}`,
     '',
     steps,
     '',
@@ -59,11 +95,6 @@ export async function findPath(
 
   return {
     content: [{ type: 'text' as const, text }],
-    structuredContent: {
-      found: true,
-      path_item_ids,
-      path_edge_types,
-      path_length: path_length ?? path_item_ids.length - 1,
-    } as unknown as Record<string, unknown>,
+    structuredContent: { found: true, path_item_ids, path_edge_types, path_length } as unknown as Record<string, unknown>,
   };
 }

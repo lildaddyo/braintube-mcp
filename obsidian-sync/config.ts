@@ -33,7 +33,7 @@ function required(name: string): string {
 export const config = {
   vaultPath:  required('VAULT_PATH'),
   apiKey:     required('BRAINTUBE_API_KEY'),
-  apiUrl:     (process.env.BRAINTUBE_API_URL ?? 'https://braintube-mcp-production.up.railway.app').replace(/\/$/, ''),
+  apiUrl:     (process.env.BRAINTUBE_API_URL ?? 'https://mcp.brain-tube.com').replace(/\/$/, ''),
   batchSize:  parseInt(process.env.BATCH_SIZE ?? '20', 10) || 20,
   dryRun:     process.env.DRY_RUN === 'true',
 };

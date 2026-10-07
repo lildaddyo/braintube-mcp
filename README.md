@@ -36,6 +36,16 @@ Your AI can search and cite your own corpus instead of starting every conversati
 
 Works with any MCP-capable client (Claude, Cursor, and others). In clients with OAuth support, just add the endpoint URL and sign in when prompted.
 
+**Claude Code** — one command:
+
+```bash
+claude mcp add --transport http --scope user braintube https://mcp.brain-tube.com/mcp   --header "X-BrainTube-Token: bt_..."
+```
+
+**Claude.ai** — Customize → Connectors → + Add → Add custom connector, paste the endpoint, sign in. No API key needed.
+
+Step-by-step setup for each client, plus how BrainTube compares with other MCP memory servers: [How to give Claude long-term memory with MCP](https://brain-tube.com/guide/give-your-ai-memory-mcp).
+
 ## Links
 
 - Website: [brain-tube.com](https://brain-tube.com)
