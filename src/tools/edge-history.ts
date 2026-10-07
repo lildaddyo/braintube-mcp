@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { dbAdmin } from '../db/supabase.js';
 
 export const edgeHistorySchema = z.object({
-  item_a: z.string().uuid().describe('UUID of the first item'),
-  item_b: z.string().uuid().describe('UUID of the second item'),
+  item_a: z.string().guid().describe('UUID of the first item'),
+  item_b: z.string().guid().describe('UUID of the second item'),
 });
 
 export const getEdgeHistoryOutputSchema = z.object({

@@ -108,21 +108,35 @@ export async function getRecentVideos(userId: string, limit = 10) {
 
 // ─── Stats ───────────────────────────────────────────────────────────────────
 
-export async function getCorpusStats(userId: string) {
-  const [itemsResult, notesCountResult] = await Promise.all([
-    dbAdmin
+// PostgREST caps one response at max-rows (1000 by default), so a single select silently
+// under-counted libraries larger than that. Page through in a stable order instead.
+const STATS_PAGE_SIZE = 1000;
+
+async function fetchAllItemsForStats(userId: string): Promise<Array<{ id: string; source_type: string | null; taint_level: number | null }>> {
+  const all: Array<{ id: string; source_type: string | null; taint_level: number | null }> = [];
+  for (let from = 0; ; from += STATS_PAGE_SIZE) {
+    const { data, error } = await dbAdmin
       .from('items')
       .select('id, source_type, taint_level')
       .eq('user_id', userId)
-      .eq('is_archived', false),
+      .eq('is_archived', false)
+      .order('id', { ascending: true })
+      .range(from, from + STATS_PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+    const page = data ?? [];
+    all.push(...page);
+    if (page.length < STATS_PAGE_SIZE) return all;
+  }
+}
+
+export async function getCorpusStats(userId: string) {
+  const [items, notesCountResult] = await Promise.all([
+    fetchAllItemsForStats(userId),
     dbAdmin
       .from('item_notes')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', userId)
   ]);
-
-  if (itemsResult.error) throw new Error(itemsResult.error.message);
-  const items = itemsResult.data ?? [];
 
   const sourceCounts: Record<string, number> = {};
   const taintDist: Record<string, number> = { '0': 0, '1': 0, '2': 0, '3': 0 };

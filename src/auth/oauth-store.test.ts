@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isRedirectUriAllowed, normalizeRedirectUri, verifyPkce } from './oauth-store.js';
+import { isRedirectUriAllowed, normalizeRedirectUri, verifyPkce, registerClient, getClient } from './oauth-store.js';
 import { createHash } from 'crypto';
 
 // Test inputs are assembled from char codes so this file stays plain ASCII.
@@ -270,4 +270,46 @@ test('verifyPkce accepts a correct S256 verifier', () => {
   const verifier = 'a'.repeat(43);
   const challenge = createHash('sha256').update(verifier).digest('base64url');
   assert.equal(verifyPkce(verifier, challenge, 'S256'), true);
+});
+
+// ─── Stateless signed client IDs ──────────────────────────────────────────────
+
+test('a registered client is recovered from its client_id alone', () => {
+  const c = registerClient(['https://claude.ai/api/mcp/auth_callback'], 'Claude');
+  const back = getClient(c.clientId);
+  if (!back) throw new Error('client not recovered');
+  assert.deepEqual(back.redirectUris, ['https://claude.ai/api/mcp/auth_callback']);
+  assert.equal(back.clientName, 'Claude');
+  assert.equal(back.clientSecret, c.clientSecret);
+});
+
+test('a tampered client_id is rejected', () => {
+  const c = registerClient(['https://claude.ai/api/mcp/auth_callback'], 'Claude');
+  const [prefixAndPayload, mac] = [c.clientId.slice(0, c.clientId.lastIndexOf('.')), c.clientId.slice(c.clientId.lastIndexOf('.') + 1)];
+  const forgedPayload = Buffer.from(JSON.stringify({ r: ['https://evil.com/cb'], n: 'x', t: 1 })).toString('base64url');
+  assert.equal(getClient(`bt_client_v2.${forgedPayload}.${mac}`), undefined);
+  const flipped = mac[0] === 'A' ? 'B' + mac.slice(1) : 'A' + mac.slice(1);
+  assert.equal(getClient(`${prefixAndPayload}.${flipped}`), undefined);
+});
+
+test('unknown and legacy client_id shapes are rejected', () => {
+  for (const id of ['', 'bt_client_0123abcd', 'bt_client_v2.', 'bt_client_v2.a.b.c', 'whatever']) {
+    assert.equal(getClient(id), undefined, id);
+  }
+});
+
+test('accepts ChatGPT connector callbacks (stable and per-connection)', () => {
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com/connector_platform_oauth_redirect'), true);
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com/connector/oauth/abc123XYZ'), true);
+});
+
+test('rejects other paths and hosts around the ChatGPT callbacks', () => {
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com/connector/oauth/abc/extra'), false);
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com/evil'), false);
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com/connector_platform_oauth_redirect/x'), false);
+  assert.equal(isRedirectUriAllowed('https://evil.chatgpt.com/connector/oauth/abc'), false);
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com.evil.com/connector/oauth/abc'), false);
+  assert.equal(isRedirectUriAllowed('http://chatgpt.com/connector/oauth/abc'), false);
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com/connector/oauth/abc?x=1'), false);
+  assert.equal(isRedirectUriAllowed('https://chatgpt.com@evil.com/connector/oauth/abc'), false);
 });

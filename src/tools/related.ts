@@ -4,7 +4,7 @@ import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 
 export const relatedSchema = z.object({
-  item_id: z.string().uuid().describe('UUID of the item to find related items for'),
+  item_id: z.string().guid().describe('UUID of the item to find related items for'),
   limit: z.number().int().min(1).max(20).default(5).describe('Number of related items to return (default 5)')
 });
 

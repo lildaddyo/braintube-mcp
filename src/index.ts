@@ -13,6 +13,7 @@ import { createMcpServer } from './server.js';
 import { getAuthContext } from './auth/jwt.js';
 import { handleObsidianSync } from './routes/obsidian-sync.js';
 import { oauthRouter } from './routes/oauth.js';
+import { mcpBrowserLanding } from './routes/browser-landing.js';
 import { serverCardRouter } from './routes/server-card.js';
 import { glamaRouter } from './routes/glama.js';
 import { restRouter } from './routes/rest.js';
@@ -21,6 +22,7 @@ import { buildOpenApiSpec } from './routes/openapi.js';
 import { ingestContent } from './tools/ingest.js';
 import { summariseConversation } from './tools/summarise.js';
 import { backfillEmbeddings } from './tools/embedding.js';
+import { validateMcpOrigin } from './security/origin.js';
 import type { AuthContext } from './types.js';
 
 // Resolve package.json relative to this file so /health reports the actual
@@ -92,7 +94,7 @@ async function requireAuth(
     );
     res.status(401).json({
       error: 'Unauthorized',
-      message: 'Provide a valid BrainTube JWT via: (1) Authorization: Bearer <token> header, (2) X-BrainTube-Token header, or (3) ?token=<jwt> query parameter'
+      message: 'Sign in through your MCP client (OAuth), or provide a valid BrainTube JWT via: (1) Authorization: Bearer <token> header, (2) X-BrainTube-Token header, or (3) ?token=<jwt> query parameter'
     });
     return;
   }
@@ -160,6 +162,9 @@ setInterval(() => {
 
 // ─── MCP endpoints ────────────────────────────────────────────────────────────
 
+// Origin validation (DNS-rebinding guard) runs before auth on every /mcp method.
+app.use('/mcp', validateMcpOrigin);
+
 app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
   const auth = (req as express.Request & { auth: AuthContext }).auth;
 
@@ -202,7 +207,7 @@ app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
   await transport.handleRequest(req, res, req.body);
 });
 
-app.get('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
+app.get('/mcp', mcpBrowserLanding, requireAuth, mcpRateLimit, async (req, res) => {
   // GET is used by clients that open a persistent SSE stream for server→client pushes.
   const incomingSessionId = req.headers['mcp-session-id'] as string | undefined;
   if (incomingSessionId) {

@@ -24,7 +24,7 @@ When you connect BrainTube via MCP, your AI can search your saved content, chat 
 {
   "mcpServers": {
     "braintube": {
-      "url": "https://braintube-mcp-production.up.railway.app/mcp",
+      "url": "https://mcp.brain-tube.com/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_API_KEY"
       }
@@ -53,7 +53,7 @@ Same config shape works for Cursor, Windsurf, ChatGPT (API), and Obsidian.
 
 ## Endpoint & Auth
 
-- **MCP endpoint:** \`https://braintube-mcp-production.up.railway.app/mcp\`
+- **MCP endpoint:** \`https://mcp.brain-tube.com/mcp\`
 - **Auth:** \`Authorization: Bearer YOUR_API_KEY\` header
 - **API keys:** brain-tube.com/settings → API Keys
 `;

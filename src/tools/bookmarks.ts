@@ -78,7 +78,7 @@ export async function listBookmarks(
 // ─── toggle_bookmark ──────────────────────────────────────────────────────────
 
 export const toggleBookmarkSchema = z.object({
-  item_id: z.string().uuid().describe('UUID of the item to act on'),
+  item_id: z.string().guid().describe('UUID of the item to act on'),
   action: z.enum(['bookmark', 'unbookmark', 'mark_read', 'mark_unread']).default('bookmark').describe(
     'bookmark: flag item + set bookmarked_at | unbookmark: clear flag | mark_read/mark_unread: toggle read state'
   ),
