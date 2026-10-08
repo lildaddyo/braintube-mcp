@@ -80,6 +80,19 @@ const mcpRateLimit = rateLimit({
   legacyHeaders: false
 });
 
+// Extension capture runs a paid LLM summary per call and is free to the user, so it also
+// gets a daily ceiling: 100 captures per user per 24 h (~$1.50 worst case at Haiku 4.5).
+const extensionCaptureDailyLimit = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  limit: 100,
+  keyGenerator: (req) => (req as express.Request & { auth?: AuthContext }).auth?.userId ?? 'unauthenticated',
+  skip: (req) => !(req as express.Request & { auth?: AuthContext }).auth,
+  validate: { xForwardedForHeader: false },
+  message: { error: 'Rate Limited', message: 'Daily limit: 100 extension captures per user. Try again tomorrow.' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
 // ─── Auth middleware ──────────────────────────────────────────────────────────
 async function requireAuth(
   req: express.Request,
@@ -256,7 +269,7 @@ app.get('/mcp-url', requireAuth, (req, res) => {
 // Body: { conversation_text, source_url, source_type, page_title? }
 // Server summarises via ANTHROPIC_API_KEY, then stores the digest.
 // Users need zero configuration — no API keys in the extension.
-app.post('/api/extension-ingest', requireAuth, mcpRateLimit, async (req, res) => {
+app.post('/api/extension-ingest', requireAuth, mcpRateLimit, extensionCaptureDailyLimit, async (req, res) => {
   const auth = (req as express.Request & { auth: AuthContext }).auth;
   const { conversation_text, source_url, source_type, page_title } = req.body as {
     conversation_text?: string;
