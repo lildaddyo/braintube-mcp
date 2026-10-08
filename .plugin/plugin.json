@@ -1,7 +1,7 @@
 {
   "name": "braintube",
   "version": "3.12.4",
-  "description": "BrainTube compiles what you watch and read into a knowledge base every AI can use. Semantic search over YouTube transcripts, articles, PDFs, EPUBs, Notion, podcasts, meeting audio and screenshots, from any MCP client.",
+  "description": "BrainTube compiles what you watch and read into a knowledge base every AI can use. Search your saved YouTube videos, articles, PDFs, ebooks, Notion pages, podcasts, audio and screenshots from Claude or any MCP streamable-HTTP client.",
   "author": { "name": "BrainTube", "url": "https://brain-tube.com" },
   "homepage": "https://brain-tube.com",
   "repository": "https://github.com/lildaddyo/braintube-mcp",

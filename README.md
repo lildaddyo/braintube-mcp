@@ -1,6 +1,6 @@
 # BrainTube MCP Server
 
-**Save once. Query anywhere.** BrainTube compiles what you watch, read and listen to — YouTube videos, podcasts, articles, PDFs — into a persistent, searchable knowledge base, and this MCP server exposes it to every MCP-capable AI client over one endpoint.
+**Save once. Query anywhere.** BrainTube compiles what you watch, read and listen to — YouTube videos, podcasts, articles, PDFs — into a persistent, searchable knowledge base, and this MCP server lets your AI search it and save to it over one endpoint.
 
 - **Endpoint:** `https://mcp.brain-tube.com/mcp` (Streamable HTTP)
 - **Version:** 3.12.4
@@ -11,8 +11,8 @@
 
 Your AI can search and cite your own corpus instead of starting every conversation cold:
 
-- **Semantic + keyword search** over everything you've saved, with citations back to the source (down to video timestamps)
-- **Ingest** notes, articles and web content directly from any MCP client
+- **Semantic + keyword search** over everything you've saved, with citations back to the source
+- **Save from your AI** — your AI can save what it finds into BrainTube, add notes and tag items in the same session
 - **Knowledge graph & related-item traversal** across your corpus
 - **Session context** — expertise profile, recent activity, and resurfacing tools
 - **Per-user isolation** — JWT-scoped access; you only ever see your own corpus
@@ -34,7 +34,7 @@ Your AI can search and cite your own corpus instead of starting every conversati
 }
 ```
 
-Works with any MCP-capable client (Claude, Cursor, and others). In clients with OAuth support, just add the endpoint URL and sign in when prompted.
+Tested with Claude; any client that speaks MCP streamable HTTP uses the same endpoint. In clients with OAuth support, just add the endpoint URL and sign in when prompted.
 
 **Claude Code** — one command:
 
