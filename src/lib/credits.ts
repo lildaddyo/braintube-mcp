@@ -1,10 +1,10 @@
 /**
  * Credit gating helpers for BrainTube MCP tools.
  *
- * Calls the `deduct_credits` Supabase RPC. The SQL function handles:
- *  - Creator bypass (creators are never charged)
- *  - Atomic decrement with insufficient-funds check
- *  - Returning { success: boolean, remaining: number, reason?: string }
+ * Calls the `deduct_credits` Supabase RPC, which does an atomic decrement with an
+ * insufficient-funds check and returns
+ * { success, cost?, balance?, required?, error?, transaction_id? }.
+ * There is no creator bypass in the RPC.
  */
 
 import { dbAdmin } from '../db/supabase.js';
@@ -45,7 +45,7 @@ export async function requirePaidPlan(userId: string): Promise<void> {
 /**
  * Deduct credits for a tool call.
  * Throws a user-facing Error (which becomes an MCP error response) if the user
- * has insufficient credits. Creator bypass is handled transparently by the RPC.
+ * has insufficient credits.
  *
  * @param userId   Authenticated user's UUID
  * @param action   Credit action type: 'ai_search' (1 credit) | 'ai_chat' (2 credits)
@@ -72,10 +72,10 @@ export async function requireCredits(
     );
   }
 
-  const result = data as { success: boolean; remaining?: number; reason?: string } | null;
+  const result = data as { success: boolean; balance?: number; error?: string } | null;
 
   if (!result?.success) {
-    const reason = result?.reason ?? 'insufficient credits';
+    const reason = result?.error ?? 'insufficient credits';
     console.warn(`[credits] deduct denied for ${toolName} (user=${userId}): ${reason}`);
     throw new Error(
       `Monthly query limit reached for your plan — top up or upgrade at https://brain-tube.com/pricing`
@@ -83,6 +83,6 @@ export async function requireCredits(
   }
 
   console.error(
-    `[credits] deducted for ${toolName} (user=${userId}, action=${action}, remaining=${result.remaining ?? '?'})`
+    `[credits] deducted for ${toolName} (user=${userId}, action=${action}, balance=${result.balance ?? '?'})`
   );
 }
