@@ -107,7 +107,7 @@ async function requireAuth(
     );
     res.status(401).json({
       error: 'Unauthorized',
-      message: 'Sign in through your MCP client (OAuth), or provide a valid BrainTube JWT via: (1) Authorization: Bearer <token> header, (2) X-BrainTube-Token header, or (3) ?token=<jwt> query parameter'
+      message: 'Sign in through your MCP client (OAuth), or provide a valid BrainTube JWT via: (1) Authorization: Bearer <token> header, or (2) X-BrainTube-Token header'
     });
     return;
   }
@@ -242,14 +242,13 @@ app.get('/mcp-url', requireAuth, (req, res) => {
     : `http://localhost:${PORT}`;
 
   const mcpUrl = `${baseUrl}/mcp`;
-  const mcpUrlWithToken = `${baseUrl}/mcp?token=<your-supabase-token>`;
 
   // Log auth method for debugging (never log the JWT itself or userId)
   console.error(`[mcp-url] request — method: ${auth.authMethod}, email: ${auth.email ?? 'unknown'}`);
 
   res.json({
     mcp_url: mcpUrl,
-    auth_method: 'oauth2_or_query_param',
+    auth_method: 'oauth2_or_header',
     instructions: {
       // Claude.ai supports native MCP OAuth — user clicks Connect, logs in once,
       // tokens refresh silently forever. No manual token pasting needed.
@@ -258,8 +257,6 @@ app.get('/mcp-url', requireAuth, (req, res) => {
       claude_code: `claude mcp add --transport http braintube ${mcpUrl} --header "Authorization: Bearer <your-supabase-token>"`,
       cursor: `{ "url": "${mcpUrl}", "headers": { "Authorization": "Bearer <your-supabase-token>" } }`,
       gemini_cli: `{ "mcpServers": { "braintube": { "url": "${mcpUrl}", "headers": { "Authorization": "Bearer <your-supabase-token>" } } } }`,
-      // Legacy fallback — still works but requires manual refresh every hour
-      claude_ai_legacy: `Add ${mcpUrlWithToken} as a connector URL (manual token, expires hourly).`,
     }
   });
 });

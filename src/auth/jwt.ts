@@ -90,7 +90,7 @@ async function validateApiKey(apiKey: string): Promise<AuthContext | null> {
   }
 }
 
-// Extract and validate auth from request — tries JWT first, then API key header, then query param
+// Extract and validate auth from request — tries JWT first, then API key header
 export async function getAuthContext(req: Request): Promise<AuthContext | null> {
   // Method 1: Authorization: Bearer <jwt>
   const authHeader = req.headers.authorization;
@@ -107,14 +107,9 @@ export async function getAuthContext(req: Request): Promise<AuthContext | null> 
     if (ctx) return ctx;
   }
 
-  // Method 3: ?token=<jwt> query parameter
-  // For clients that cannot set custom headers (e.g. Claude.ai custom connectors).
-  // The full MCP URL becomes: /mcp?token=<supabase-jwt>
-  const queryToken = (req as Request & { query?: Record<string, string> }).query?.token;
-  if (typeof queryToken === 'string' && queryToken) {
-    const ctx = await validateJWT(queryToken);
-    if (ctx) return ctx;
-  }
+  // A ?token=<jwt> query parameter used to be accepted here (Method 3). It was removed on
+  // 2026-10-09: tokens in URLs end up in proxy/edge request logs and browser history.
+  // Claude.ai uses OAuth; other clients send the Authorization or X-BrainTube-Token header.
 
   return null;
 }
