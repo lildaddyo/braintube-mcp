@@ -251,3 +251,30 @@ export function verifyPkce(
   const computed = createHash('sha256').update(codeVerifier).digest('base64url');
   return computed === codeChallenge;
 }
+
+// ─── Refresh failures (RFC 6749 §5.2) ────────────────────────────────────────
+// How a failed Supabase refresh is reported to the MCP client. A 4xx from
+// Supabase means the refresh token is dead (revoked, reused, or its session was
+// signed out everywhere): that is invalid_grant, which RFC 6749 sends as 400,
+// and the client should ask the user to sign in again. A 429, a 5xx or a network error
+// is our problem, not the user's: answer 503 temporarily_unavailable so the
+// client keeps its refresh token and retries, instead of dropping a connector
+// that is still valid.
+
+export interface RefreshFailure {
+  status: number;
+  body: { error: string; error_description: string };
+}
+
+export function refreshFailure(upstreamStatus: number | null): RefreshFailure {
+  if (upstreamStatus !== null && upstreamStatus >= 400 && upstreamStatus < 500 && upstreamStatus !== 429) {
+    return {
+      status: 400,
+      body: { error: 'invalid_grant', error_description: 'Refresh token invalid or expired. User must re-authenticate.' },
+    };
+  }
+  return {
+    status: 503,
+    body: { error: 'temporarily_unavailable', error_description: 'Could not refresh the token right now. Try again shortly.' },
+  };
+}

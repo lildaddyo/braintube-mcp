@@ -30,6 +30,7 @@ import {
   consumeAuthCode,
   verifyPkce,
   normalizeRedirectUri,
+  refreshFailure,
 } from '../auth/oauth-store.js';
 
 export const oauthRouter = Router();
@@ -492,7 +493,8 @@ oauthRouter.post('/oauth/token', async (req: Request, res: Response) => {
 
       if (!resp.ok) {
         console.warn('[oauth] refresh failed — status', resp.status);
-        res.status(401).json({ error: 'invalid_grant', error_description: 'Refresh token invalid or expired. User must re-authenticate.' });
+        const failure = refreshFailure(resp.status);
+        res.status(failure.status).json(failure.body);
         return;
       }
 
@@ -512,7 +514,8 @@ oauthRouter.post('/oauth/token', async (req: Request, res: Response) => {
       });
     } catch (err) {
       console.error('[oauth] refresh error:', err);
-      res.status(500).json({ error: 'server_error', error_description: 'Failed to refresh token' });
+      const failure = refreshFailure(null);
+      res.status(failure.status).json(failure.body);
     }
     return;
   }
