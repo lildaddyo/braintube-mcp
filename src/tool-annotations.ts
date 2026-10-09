@@ -82,7 +82,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolAnnotationEntry> = {
 
   // ── Read: Brains (public Brains belong to other users → open world) ───────
   list_brains:              read('List My Brains'),
-  chat_with_brain:          read('Ask a Public Brain', true),
+  chat_with_brain:          read('Ask a Brain', true),
 
   // ── Read: external sources ────────────────────────────────────────────────
   search_obsidian:          read('Search Obsidian Vault', true),
