@@ -30,6 +30,7 @@ import OpenAI from 'openai';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AuthContext } from '../types.js';
 import { dbAdmin } from '../db/supabase.js';
+import { resolveUserRole, type UserRole } from '../security/tool-access.js';
 
 // -- Limits and constants (from the spec) --------------------------------------------------
 
@@ -49,6 +50,22 @@ export type Surface = (typeof SURFACES)[number];
 // size because it already counts the ORIGINAL tool payload lengths, so it bounds what is stored.
 export const DAILY_ROUND_LIMIT = 5000;
 export const DAILY_EST_TOKEN_LIMIT = 25_000_000; // ~100 MB of text per user per day
+// Free accounts (no premium/admin row in user_roles) get a fifth of that, so a script with a few
+// throwaway signups cannot grow the prod DB by hundreds of MB a day.
+export const FREE_DAILY_ROUND_LIMIT = 1000;
+export const FREE_DAILY_EST_TOKEN_LIMIT = 5_000_000; // ~20 MB of text per user per day
+
+export interface QuotaLimits {
+  rounds: number;
+  estTokens: number;
+}
+export const PAID_LIMITS: QuotaLimits = { rounds: DAILY_ROUND_LIMIT, estTokens: DAILY_EST_TOKEN_LIMIT };
+export const FREE_LIMITS: QuotaLimits = { rounds: FREE_DAILY_ROUND_LIMIT, estTokens: FREE_DAILY_EST_TOKEN_LIMIT };
+
+/** Daily limits for a role: premium and admin get the full quota, everyone else the free one. */
+export function limitsForRole(role: UserRole): QuotaLimits {
+  return role === 'premium' || role === 'admin' ? PAID_LIMITS : FREE_LIMITS;
+}
 
 const MAX_ROUND_NO = 2147483647; // session_rounds.round_no is int4
 const SUM_PAGE_SIZE = 1000; // PostgREST returns at most 1000 rows per request
@@ -530,14 +547,31 @@ export async function usageToday(db: SupabaseClient, userId: string, now: Date =
  * Would storing `incoming` push today's usage past a limit? Conservative: every round in the call
  * is counted, even one that only re-uploads an existing round.
  */
-export function judgeQuota(today: QuotaUsage, incoming: QuotaUsage): QuotaVerdict {
-  if (today.rounds + incoming.rounds > DAILY_ROUND_LIMIT) {
-    return { ok: false, error: 'daily_round_limit', limit: DAILY_ROUND_LIMIT };
+export function judgeQuota(today: QuotaUsage, incoming: QuotaUsage, limits: QuotaLimits = PAID_LIMITS): QuotaVerdict {
+  if (today.rounds + incoming.rounds > limits.rounds) {
+    return { ok: false, error: 'daily_round_limit', limit: limits.rounds };
   }
-  if (today.estTokens + incoming.estTokens > DAILY_EST_TOKEN_LIMIT) {
-    return { ok: false, error: 'daily_token_limit', limit: DAILY_EST_TOKEN_LIMIT };
+  if (today.estTokens + incoming.estTokens > limits.estTokens) {
+    return { ok: false, error: 'daily_token_limit', limit: limits.estTokens };
   }
   return { ok: true };
+}
+
+/**
+ * Run `fn` after every earlier call for the same key has settled. The quota check and the
+ * writes it guards run under this lock, so parallel uploads from one user cannot all pass the
+ * check against the same "used today" number and overshoot the quota together.
+ */
+export async function withUserLock<T>(locks: Map<string, Promise<unknown>>, key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = locks.get(key) ?? Promise.resolve();
+  const run = prev.catch(() => undefined).then(fn);
+  const tail = run.catch(() => undefined);
+  locks.set(key, tail);
+  try {
+    return await run;
+  } finally {
+    if (locks.get(key) === tail) locks.delete(key);
+  }
 }
 
 export type QuotaFn = (userId: string, incoming: QuotaUsage) => Promise<QuotaVerdict>;
@@ -678,8 +712,11 @@ export function createSessionIngest(overrides: Partial<SessionIngestDeps> = {}) 
   const db = overrides.db ?? dbAdmin;
   const embed = overrides.embed ?? openAiEmbed;
   const quota: QuotaFn =
-    overrides.quota ?? (async (userId, incoming) => judgeQuota(await usageToday(db, userId), incoming));
+    overrides.quota ??
+    (async (userId, incoming) =>
+      judgeQuota(await usageToday(db, userId), incoming, limitsForRole(await resolveUserRole(userId))));
   const pending = new Set<Promise<void>>();
+  const userLocks = new Map<string, Promise<unknown>>();
   const router = express.Router();
 
   router.post('/', guarded('post', async (req, res) => {
@@ -711,22 +748,27 @@ export function createSessionIngest(overrides: Partial<SessionIngestDeps> = {}) 
     let sessionId: string;
     let roundCount: number;
     try {
-      if (request.rounds.length > 0) {
-        const verdict = await quota(userId, {
-          rounds: request.rounds.length,
-          estTokens: request.rounds.reduce((sum, r) => sum + r.est_tokens, 0),
-        });
-        if (!verdict.ok) {
-          log('quota user_limit=' + verdict.error);
-          res.status(429).json({ error: verdict.error, limit: verdict.limit, resets: 'utc_midnight' });
-          return;
+      const outcome = await withUserLock(userLocks, userId, async () => {
+        if (request.rounds.length > 0) {
+          const verdict = await quota(userId, {
+            rounds: request.rounds.length,
+            estTokens: request.rounds.reduce((sum, r) => sum + r.est_tokens, 0),
+          });
+          if (!verdict.ok) return verdict;
         }
+        const sid = await upsertSession(db, userId, request);
+        if (request.rounds.length > 0) await upsertRounds(db, userId, sid, request.rounds);
+        const { count, totalChars } = await sumRounds(db, userId, sid);
+        await finishSession(db, userId, sid, request, count, totalChars);
+        return { ok: true as const, sid, count };
+      });
+      if (!outcome.ok) {
+        log('quota user_limit=' + outcome.error);
+        res.status(429).json({ error: outcome.error, limit: outcome.limit, resets: 'utc_midnight' });
+        return;
       }
-      sessionId = await upsertSession(db, userId, request);
-      if (request.rounds.length > 0) await upsertRounds(db, userId, sessionId, request.rounds);
-      const { count, totalChars } = await sumRounds(db, userId, sessionId);
-      await finishSession(db, userId, sessionId, request, count, totalChars);
-      roundCount = count;
+      sessionId = outcome.sid;
+      roundCount = outcome.count;
     } catch (err) {
       const stage = err instanceof StageError ? err.stage : 'unexpected';
       log('failed stage=' + stage + ' code=' + (err instanceof StageError ? err.code : 'unknown'));

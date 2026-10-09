@@ -23,6 +23,7 @@ import { ingestContent, DailyIngestLimitError } from './tools/ingest.js';
 import { summariseConversation } from './tools/summarise.js';
 import { backfillEmbeddings } from './tools/embedding.js';
 import { validateMcpOrigin } from './security/origin.js';
+import { resolveUserRole } from './security/tool-access.js';
 import type { AuthContext } from './types.js';
 
 // Resolve package.json relative to this file so /health reports the actual
@@ -260,7 +261,7 @@ app.get('/mcp-url', requireAuth, (req, res) => {
   const mcpUrl = `${baseUrl}/mcp`;
 
   // Log auth method for debugging (never log the JWT itself or userId)
-  console.error(`[mcp-url] request — method: ${auth.authMethod}, email: ${auth.email ?? 'unknown'}`);
+  console.error(`[mcp-url] request — method: ${auth.authMethod}, user: ${auth.userId.slice(0, 8)}`);
 
   res.json({
     mcp_url: mcpUrl,
@@ -341,7 +342,14 @@ app.post('/api/extension-ingest', requireAuth, mcpRateLimit, extensionCaptureDai
 // Use this when backfill_embeddings is beyond the 15-tool cap in claude.ai.
 app.post('/api/backfill', requireAuth, async (req, res) => {
   const auth = (req as express.Request & { auth: AuthContext }).auth;
-  const batchSize = parseInt((req.query.batch_size as string) ?? '20', 10);
+  // Same tier as the backfill_embeddings MCP tool (admin): this route used to let any signed-in
+  // account run paid embeddings with an unbounded batch size (BTMCP-07).
+  if ((await resolveUserRole(auth.userId)) !== 'admin') {
+    res.status(403).json({ ok: false, error: 'backfill is restricted to administrators' });
+    return;
+  }
+  const requested = parseInt((req.query.batch_size as string) ?? '20', 10);
+  const batchSize = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 50) : 20;
   console.error(`[backfill] starting for user ${auth.userId}, batchSize=${batchSize}`);
   try {
     const result = await backfillEmbeddings(auth.userId, batchSize);

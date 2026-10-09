@@ -339,7 +339,7 @@ oauthRouter.post('/oauth/authorize', loginIpLimit, loginEmailLimit, async (req: 
     redirectUri: pending.redirectUri,
   });
 
-  console.error(`[oauth] auth code issued — email: ${userEmail}`);
+  console.error('[oauth] auth code issued'); // no email in logs (BTMCP-10)
 
   // Defense-in-depth: re-validate immediately before redirect. Upstream gates
   // exist (allowlist at /oauth/register, registered-URI check at /oauth/authorize),
@@ -494,7 +494,7 @@ oauthRouter.get('/oauth/google/callback', async (req: Request, res: Response) =>
     redirectUri: pending.redirectUri,
   });
 
-  console.error(`[oauth/google/callback] auth code issued — email: ${tokenJson.user.email ?? '(no email)'}`);
+  console.error('[oauth/google/callback] auth code issued'); // no email in logs (BTMCP-10)
 
   // Defense-in-depth: see /oauth/authorize POST for the rationale.
   const claudeRedirectTarget = normalizeRedirectUri(pending.redirectUri);
@@ -548,7 +548,7 @@ oauthRouter.post('/oauth/token', refreshIpLimit, async (req: Request, res: Respo
       return;
     }
 
-    console.error(`[oauth] token issued — email: ${entry.email}`);
+    console.error('[oauth] token issued'); // no email in logs (BTMCP-10)
 
     res.json({
       access_token: entry.accessToken,

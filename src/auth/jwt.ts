@@ -44,7 +44,7 @@ async function validateJWT(token: string): Promise<AuthContext | null> {
     }
     const user = (await resp.json()) as { id?: string; email?: string };
     if (!user?.id) return null;
-    console.error(`[auth] jwt validated — email: ${user.email}`);
+    console.error(`[auth] jwt validated — user: ${String(user.id).slice(0, 8)}`); // no email in logs (BTMCP-10)
     return {
       userId: user.id,
       email: user.email,

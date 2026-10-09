@@ -15,9 +15,27 @@ export const getEdgeHistoryOutputSchema = z.object({
   }).passthrough()),
 });
 
+const NOT_FOUND = {
+  content: [{ type: 'text' as const, text: 'No edge history found between these two items.' }],
+  structuredContent: { history: [] },
+};
+
 export async function getEdgeHistory(
-  input: z.infer<typeof edgeHistorySchema>
+  input: z.infer<typeof edgeHistorySchema>,
+  userId: string,
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
+  // The RPC runs with the service role and is not scoped to a user, so both items must belong
+  // to the caller before it is called (BTMCP-08). Someone else's items look exactly like
+  // items with no history, so the answer does not reveal whether a UUID exists.
+  const ids = Array.from(new Set([input.item_a, input.item_b]));
+  const { data: owned, error: ownErr } = await dbAdmin
+    .from('items')
+    .select('id')
+    .eq('user_id', userId)
+    .in('id', ids);
+  if (ownErr) throw new Error(`get_edge_history ownership check failed: ${ownErr.message}`);
+  if ((owned ?? []).length !== ids.length) return NOT_FOUND;
+
   const { data, error } = await dbAdmin.rpc('get_edge_history', {
     item_a: input.item_a,
     item_b: input.item_b,

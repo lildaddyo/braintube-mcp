@@ -8,6 +8,8 @@ import { dbAdmin } from '../db/supabase.js';
 import { findItemBySourceUrl, findItemByTitle } from '../db/supabase.js';
 import { embedItem } from './embedding.js';
 
+import { openFromStorage, sealForStorage } from '../lib/secret-box.js';
+
 export { ingestNotionPageSchema, ingestNotionDatabaseSchema, setNotionApiKeySchema, ingestNotionPageOutputSchema, ingestNotionDatabaseOutputSchema, setNotionApiKeyOutputSchema } from './notion-schemas.js';
 
 // ─── Notion client factory ────────────────────────────────────────────────────
@@ -36,7 +38,7 @@ export async function getNotionClient(userId: string): Promise<Client> {
     throw new Error('No Notion connection found. Connect via OAuth at brain-tube.com/settings or use set_notion_api_key.');
   }
 
-  return new Client({ auth: data.setting_value });
+  return new Client({ auth: openFromStorage(data.setting_value) });
 }
 
 // ─── Block text extraction ────────────────────────────────────────────────────
@@ -310,7 +312,8 @@ export async function setNotionApiKey(apiKey: string, userId: string): Promise<v
       {
         user_id: userId,
         setting_key: 'notion_api_key',
-        setting_value: apiKey,
+        // Sealed with SECRET_BOX_KEY before it reaches Postgres (BTMCP-06).
+        setting_value: sealForStorage(apiKey),
         updated_at: new Date().toISOString()
       },
       { onConflict: 'user_id,setting_key' }

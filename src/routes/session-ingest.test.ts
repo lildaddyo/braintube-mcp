@@ -34,6 +34,10 @@ const {
   DAILY_ROUND_LIMIT,
   DAILY_EST_TOKEN_LIMIT,
   judgeQuota,
+  limitsForRole,
+  withUserLock,
+  FREE_LIMITS,
+  PAID_LIMITS,
   usageToday,
   utcDayStart,
 } = await import('./session-ingest.js');
@@ -1528,4 +1532,41 @@ test('the real quota check answers 500 stage=quota_check when the database fails
     assert.equal((await asJson(res)).stage, 'quota_check');
     assert.equal(h.db.tables.claude_sessions.length, 0);
   });
+});
+
+test('limitsForRole: premium and admin get the full quota, free accounts a fifth', () => {
+  assert.deepEqual(limitsForRole('admin'), PAID_LIMITS);
+  assert.deepEqual(limitsForRole('premium'), PAID_LIMITS);
+  assert.deepEqual(limitsForRole('authenticated'), FREE_LIMITS);
+  assert.ok(FREE_LIMITS.rounds < PAID_LIMITS.rounds && FREE_LIMITS.estTokens < PAID_LIMITS.estTokens);
+  assert.deepEqual(judgeQuota({ rounds: FREE_LIMITS.rounds, estTokens: 0 }, { rounds: 1, estTokens: 0 }, FREE_LIMITS), {
+    ok: false, error: 'daily_round_limit', limit: FREE_LIMITS.rounds,
+  });
+  assert.deepEqual(judgeQuota({ rounds: FREE_LIMITS.rounds, estTokens: 0 }, { rounds: 1, estTokens: 0 }, PAID_LIMITS), { ok: true });
+});
+
+test('withUserLock serialises calls per user, keeps users independent and survives a failure', async () => {
+  const locks = new Map<string, Promise<unknown>>();
+  const order: string[] = [];
+  const slow = (tag: string, ms: number) => async () => {
+    order.push(tag + ':start');
+    await new Promise((r) => setTimeout(r, ms));
+    order.push(tag + ':end');
+    return tag;
+  };
+  const failing = async () => { order.push('f:start'); throw new Error('boom'); };
+  const results = await Promise.allSettled([
+    withUserLock(locks, 'u1', slow('a', 30)),
+    withUserLock(locks, 'u1', failing),
+    withUserLock(locks, 'u1', slow('b', 5)),
+    withUserLock(locks, 'u2', slow('c', 5)),
+  ]);
+  assert.equal(results[0].status, 'fulfilled');
+  assert.equal(results[1].status, 'rejected');
+  assert.equal(results[2].status, 'fulfilled');
+  // u1's calls never overlap; u2 is not blocked behind u1.
+  const u1 = order.filter((e) => !e.startsWith('c:'));
+  assert.deepEqual(u1, ['a:start', 'a:end', 'f:start', 'b:start', 'b:end']);
+  assert.ok(order.indexOf('c:end') < order.indexOf('a:end'));
+  assert.equal(locks.size, 0);
 });
