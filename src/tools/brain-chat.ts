@@ -1,5 +1,5 @@
 /**
- * chat_with_brain — query a public BrainTube Brain via the brain-chat edge function.
+ * chat_with_brain — query a public BrainTube Brain, or one of the user's own, via the brain-chat edge function.
  * list_brains     — list the authenticated user's Brains.
  */
 
@@ -30,13 +30,35 @@ export const chatWithBrainOutputSchema = z.object({
 
 const BRAIN_CHAT_URL = 'https://iqjnmmtvhyavgrsxpoao.supabase.co/functions/v1/brain-chat';
 
+/**
+ * Headers that tell brain-chat who is asking. brain-chat honours x-bt-acting-user only
+ * when the bearer is the service-role key (constant-time compared), so a client can't
+ * forge it. The acting user gets owner access to their own private/personal brains and
+ * per-user visitor limits on everyone else's, instead of sharing one anonymous quota
+ * keyed on Railway's egress IP.
+ *
+ * Metering happens exactly once, here in the MCP server: every chat_with_brain call site
+ * runs requireFairUse('chat') first, and x-bt-fair-use: counted tells brain-chat to skip
+ * its own consume_fair_use for owner calls.
+ */
+export function brainChatHeaders(userId: string): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (serviceKey) {
+    headers.Authorization = `Bearer ${serviceKey}`;
+    headers['x-bt-acting-user'] = userId;
+    headers['x-bt-fair-use'] = 'counted';
+  }
+  return headers;
+}
+
 export async function chatWithBrain(
   input: z.infer<typeof chatWithBrainSchema>,
   userId: string
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
   const res = await fetch(BRAIN_CHAT_URL, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: brainChatHeaders(userId),
     body: JSON.stringify({
       brain_slug:   input.brain_slug,
       question:     input.question,
