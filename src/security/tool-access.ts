@@ -71,7 +71,8 @@ export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   // These were 'premium', but no account holds a premium role — user_roles
   // only stores admin / moderator / user — so the write half of the connector
   // was invisible to everyone but the admin. MCP has no paid gate (pricing:
-  // Free = 30 credits a month, saving free, reads metered).
+  // saving free; reads free up to a monthly fair-use allowance, then credits —
+  // see lib/credits.ts requireFairUse).
   tag_item:               'authenticated',
   toggle_bookmark:        'authenticated',
   add_note:               'authenticated',

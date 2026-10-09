@@ -61,7 +61,7 @@ import {
 } from './tools/firewall-admin.js';
 import { connectReadwiseSchema, connectReadwise, connectReadwiseOutputSchema, syncReadwiseSchema, syncReadwise, syncReadwiseOutputSchema } from './tools/readwise.js';
 import type { ShortCircuitStatus } from './security/tool-envelope.js';
-import { requireCredits } from './lib/credits.js';
+import { requireCredits, requireFairUse } from './lib/credits.js';
 import { dbAdmin } from './db/supabase.js';
 import { detectInjection, logInjectionAttempt } from './security/injection.js';
 import { auditLog } from './lib/audit.js';
@@ -410,7 +410,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     async (input) => {
-      await requireCredits(auth.userId, 'ai_search', 'search_knowledge');
+      await requireFairUse(auth.userId, 'mcp_read', 'ai_search', 'search_knowledge');
       return searchKnowledge(input, auth.userId);
     }
   );
@@ -470,7 +470,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     async (input) => {
-      await requireCredits(auth.userId, 'ai_search', 'search_by_source');
+      await requireFairUse(auth.userId, 'mcp_read', 'ai_search', 'search_by_source');
       return searchBySource(input, auth.userId);
     }
   );
@@ -484,7 +484,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     async (input) => {
-      await requireCredits(auth.userId, 'ai_search', 'search_by_date_range');
+      await requireFairUse(auth.userId, 'mcp_read', 'ai_search', 'search_by_date_range');
       return searchByDate(input, auth.userId);
     }
   );
@@ -601,7 +601,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     async (input) => {
-      await requireCredits(auth.userId, 'ai_search', 'get_expertise_profile');
+      await requireFairUse(auth.userId, 'mcp_read', 'ai_search', 'get_expertise_profile');
       return getExpertiseProfileTool(input, auth.userId);
     }
   );
@@ -615,7 +615,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     async (input) => {
-      await requireCredits(auth.userId, 'ai_chat', 'get_session_brief');
+      await requireFairUse(auth.userId, 'mcp_read', 'ai_search', 'get_session_brief');
       return getSessionBrief(input, auth.userId);
     }
   );
@@ -790,7 +790,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       annotations: { readOnlyHint: true, openWorldHint: true }
     },
     async (input) => {
-      await requireCredits(auth.userId, 'ai_chat', 'chat_with_brain');
+      await requireFairUse(auth.userId, 'chat', 'ai_chat', 'chat_with_brain');
       return chatWithBrain(input, auth.userId);
     }
   );
@@ -956,7 +956,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     async (input) => {
-      await requireCredits(auth.userId, 'deep_research', 'deep_search');
+      await requireCredits(auth.userId, 'deep_search', 'deep_search');
       return deepSearch(input, auth.userId);
     }
   );

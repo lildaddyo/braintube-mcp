@@ -9,7 +9,10 @@
 
 import { dbAdmin } from '../db/supabase.js';
 
-export type CreditAction = 'ai_search' | 'ai_chat' | 'deep_research';
+export type CreditAction = 'ai_search' | 'ai_chat' | 'deep_search';
+
+/** Fair-use allowances (table fair_use_allowances): reads per month, chats per day. */
+export type FairUseMetric = 'mcp_read' | 'chat';
 
 /**
  * Entitlement gate: throws a user-facing MCP error if the user has no active
@@ -48,7 +51,7 @@ export async function requirePaidPlan(userId: string): Promise<void> {
  * has insufficient credits.
  *
  * @param userId   Authenticated user's UUID
- * @param action   Credit action type: 'ai_search' (1 credit) | 'ai_chat' (2 credits)
+ * @param action   Credit action type: 'ai_search' (1) | 'ai_chat' (2) | 'deep_search' (2)
  * @param toolName Human-readable tool name for metadata/logging
  */
 export async function requireCredits(
@@ -84,5 +87,52 @@ export async function requireCredits(
 
   console.error(
     `[credits] deducted for ${toolName} (user=${userId}, action=${action}, balance=${result.balance ?? '?'})`
+  );
+}
+
+/**
+ * Fair-use gate: free while the user is inside their plan's allowance for
+ * `metric` (MCP reads per month, chats per day — shared with in-app library
+ * chat), then charges `action` like requireCredits. Calls the
+ * `consume_fair_use` RPC, which counts and charges atomically.
+ */
+export async function requireFairUse(
+  userId: string,
+  metric: FairUseMetric,
+  action: CreditAction,
+  toolName: string
+): Promise<void> {
+  const { data, error } = await dbAdmin.rpc('consume_fair_use', {
+    p_user_id: userId,
+    p_metric: metric,
+    p_action: action,
+    p_metadata: { source: 'mcp', tool: toolName },
+  });
+
+  if (error) {
+    console.error(`[credits] consume_fair_use RPC error for ${toolName}:`, error.message);
+    throw new Error(
+      `Monthly query limit reached for your plan — top up or upgrade at https://brain-tube.com/pricing`
+    );
+  }
+
+  const result = data as {
+    success: boolean; charged?: boolean; used?: number; allowance?: number;
+    period?: string; balance?: number; error?: string;
+  } | null;
+
+  if (!result?.success) {
+    const reason = result?.error ?? 'insufficient credits';
+    console.warn(`[credits] fair-use denied for ${toolName} (user=${userId}): ${reason}`);
+    const scope = metric === 'chat' ? 'daily free chats' : 'monthly free searches';
+    throw new Error(
+      `You've used your ${scope} (${result?.allowance ?? 0}) and have no credits left — top up or upgrade at https://brain-tube.com/pricing`
+    );
+  }
+
+  console.error(
+    result.charged
+      ? `[credits] ${toolName} past fair use, charged ${action} (user=${userId}, balance=${result.balance ?? '?'})`
+      : `[credits] ${toolName} free (${metric} ${result.used}/${result.allowance} this ${result.period}, user=${userId})`
   );
 }
