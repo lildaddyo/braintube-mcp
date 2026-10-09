@@ -32,6 +32,7 @@ import {
   normalizeRedirectUri,
   refreshFailure,
 } from '../auth/oauth-store.js';
+import { BRAND_LOGO_DATA_URI } from './brand-logo.js';
 
 export const oauthRouter = Router();
 
@@ -534,27 +535,68 @@ function esc(s: string): string {
 }
 
 // ─── Shared brand styles for OAuth pages ─────────────────────────────────────
-// Fraunces (display) + Space Grotesk (body) — matches brain-tube.com landing.
+// Values from the brand canon (bt-brand-canon §1–§2, brain-tube-reborn
+// src/lib/editorial-theme.ts): DARK_PALETTE by default, LIGHT_PALETTE when the
+// browser prefers light. Fraunces sets headings and prose; Space Grotesk sets
+// labels, buttons and eyebrows (uppercase, letter-spaced), never body copy.
 
 const BRAND_HEAD = `<meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="color-scheme" content="dark light" />
+<meta name="theme-color" content="#0d0a1f" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#F9FAFB" media="(prefers-color-scheme: light)" />
+<link rel="icon" type="image/png" href="${BRAND_LOGO_DATA_URI}" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Space+Grotesk:wght@400;500;600&display=swap">`;
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400&family=Space+Grotesk:wght@500;600&display=swap">`;
 
-const BRAND_BASE_CSS = `*,*::before,*::after { box-sizing: border-box; }
-  html,body { margin:0; padding:0; background:#0a0a0a; color:#e8e8e8; font-family:'Space Grotesk',system-ui,-apple-system,sans-serif; min-height:100vh; }
-  body { display:flex; align-items:center; justify-content:center; padding:24px; }
-  .card { width:100%; max-width:420px; background:#141414; border:1px solid rgba(255,255,255,.06); border-radius:16px; padding:36px 32px; }
-  .wordmark { font-family:'Fraunces',Georgia,serif; font-weight:700; font-size:32px; letter-spacing:-.02em; margin:0 0 12px; line-height:1; }
-  .wordmark .brain { color:#fff; }
-  .wordmark .tube { color:#FF6B1A; }
-  .subtitle { margin:0 0 28px; font-size:14px; color:#9a9a9a; line-height:1.5; }
-  .footer { margin:24px 0 0; text-align:center; font-size:12px; color:#6a6a6a; line-height:1.5; }
-  .error { background:rgba(255,87,87,.08); border:1px solid rgba(255,87,87,.2); color:#ff8a8a; padding:10px 12px; border-radius:8px; font-size:13px; margin-bottom:16px; }`;
+const BRAND_BASE_CSS = `:root {
+    --ink:#f5f0ff; --muted:#b8a8d9; --faint:#8a7dab; --hair:#5a4d7a; --accent:#a78bfa;
+    --rule:rgba(167,139,250,.15); --card:rgba(167,139,250,.06); --card-edge:rgba(167,139,250,.18);
+    --field:rgba(7,6,15,.55); --field-edge:rgba(167,139,250,.22); --focus-ring:rgba(167,139,250,.22);
+    --page:radial-gradient(ellipse at 50% 0%, #2a1a4a 0%, #1a0f33 35%, #0d0a1f 70%, #07060f 100%);
+    --page-solid:#0d0a1f;
+    --cta:linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%); --cta-shadow:0 8px 24px -8px rgba(139,92,246,.6);
+    --card-shadow:0 30px 80px -40px rgba(0,0,0,.8);
+    --error-ink:#fda4af; --error-bg:rgba(244,63,94,.08); --error-edge:rgba(244,63,94,.28);
+    --serif:'Fraunces','Iowan Old Style','Apple Garamond','Baskerville','Times New Roman',serif;
+    --sans:'Space Grotesk','Source Code Pro','IBM Plex Mono',ui-monospace,monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --ink:#020817; --muted:#6B7280; --faint:#6B7280; --hair:#717171; --accent:#6D4DE6;
+      --rule:#E4E7EB; --card:#FFFFFF; --card-edge:#E4E7EB;
+      --field:#FFFFFF; --field-edge:#E4E7EB; --focus-ring:rgba(109,77,230,.18);
+      --page:#F9FAFB; --page-solid:#F9FAFB;
+      --cta:linear-gradient(135deg, #6D4DE6 0%, #9F4DBF 60%, #BD6FA3 100%); --cta-shadow:0 6px 20px -8px rgba(109,77,230,.45);
+      --card-shadow:0 24px 60px -36px rgba(2,8,23,.25);
+      --error-ink:#be123c; --error-bg:#fff1f2; --error-edge:#fecdd3;
+    }
+  }
+  *,*::before,*::after { box-sizing:border-box; }
+  html { background:var(--page-solid); }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px 16px;
+    background:var(--page); background-attachment:fixed; color:var(--ink); font-family:var(--serif);
+    -webkit-font-smoothing:antialiased; }
+  .card { width:100%; max-width:420px; background:var(--card); border:1px solid var(--card-edge); border-radius:20px;
+    padding:36px 32px 28px; box-shadow:var(--card-shadow); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); }
+  .lockup { display:flex; align-items:center; gap:10px; margin:0 0 28px; color:var(--ink); }
+  .lockup img { width:34px; height:auto; display:block; }
+  .lockup span { font-family:var(--serif); font-weight:600; font-size:21px; letter-spacing:-.01em; }
+  .eyebrow { font-family:var(--sans); font-weight:500; font-size:11px; letter-spacing:2.5px; text-transform:uppercase; color:var(--faint); margin:0 0 10px; }
+  .title { font-family:var(--serif); font-weight:400; font-size:30px; line-height:1.12; letter-spacing:-.015em; margin:0 0 12px; color:var(--ink); }
+  .title em { font-style:italic; color:var(--accent); }
+  .title .dot { color:var(--hair); }
+  .lede { font-family:var(--serif); font-size:15px; line-height:1.55; color:var(--muted); margin:0 0 26px; }
+  .footer { font-family:var(--serif); font-size:13px; line-height:1.55; color:var(--faint); margin:22px 0 0; padding-top:18px; border-top:1px solid var(--rule); }
+  .error { font-family:var(--serif); font-size:14px; line-height:1.5; color:var(--error-ink); background:var(--error-bg);
+    border:1px solid var(--error-edge); border-radius:10px; padding:10px 12px; margin:0 0 18px; }
+  @media (max-width:420px) { .card { padding:28px 20px 22px; } .title { font-size:26px; } }`;
 
-function loginForm(state: string, errorMsg?: string): string {
-  const errorHtml = errorMsg ? `<div class="error">${esc(errorMsg)}</div>` : '';
+const BRAND_LOCKUP = `<div class="lockup"><img src="${BRAND_LOGO_DATA_URI}" alt="" width="34" height="33" /><span>BrainTube</span></div>`;
+
+export function loginForm(state: string, errorMsg?: string): string {
+  const errorHtml = errorMsg ? `<div class="error" role="alert">${esc(errorMsg)}</div>` : '';
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -562,22 +604,36 @@ ${BRAND_HEAD}
 <title>Connect BrainTube to Claude</title>
 <style>
   ${BRAND_BASE_CSS}
-  .google-btn { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; padding:12px 16px; background:#fff; color:#1f1f1f; border:0; border-radius:10px; font-family:inherit; font-size:14px; font-weight:500; cursor:pointer; text-decoration:none; transition:background 120ms ease; }
-  .google-btn:hover { background:#f4f4f4; }
+  .google-btn { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; padding:13px 16px;
+    background:#fff; color:#1f1f1f; border:1px solid #dadce0; border-radius:12px; font-family:var(--sans); font-size:14px;
+    font-weight:500; cursor:pointer; text-decoration:none; transition:background 120ms ease, transform 120ms ease; }
+  .google-btn:hover { background:#f6f6f8; }
+  .google-btn:active { transform:translateY(1px); }
   .google-btn svg { width:18px; height:18px; flex-shrink:0; }
-  .divider { display:flex; align-items:center; gap:12px; margin:20px 0; font-size:12px; color:#5a5a5a; text-transform:uppercase; letter-spacing:.08em; }
-  .divider::before,.divider::after { content:''; flex:1; height:1px; background:rgba(255,255,255,.08); }
-  label { display:block; font-size:13px; font-weight:500; color:#c8c8c8; margin:0 0 6px; }
-  input[type=email],input[type=password] { width:100%; padding:11px 14px; background:#1c1c1c; border:1px solid rgba(255,255,255,.08); border-radius:10px; color:#fff; font-family:inherit; font-size:14px; margin-bottom:16px; outline:none; transition:border-color 120ms ease; }
-  input[type=email]:focus,input[type=password]:focus { border-color:#866CEF; }
-  .submit-btn { width:100%; padding:12px 16px; background:#866CEF; color:#fff; border:0; border-radius:10px; font-family:inherit; font-size:14px; font-weight:600; cursor:pointer; transition:background 120ms ease; margin-top:4px; }
-  .submit-btn:hover { background:#9a82f2; }
+  .divider { display:flex; align-items:center; gap:14px; margin:22px 0; font-family:var(--sans); font-size:10px;
+    font-weight:500; letter-spacing:3px; text-transform:uppercase; color:var(--faint); }
+  .divider::before,.divider::after { content:''; flex:1; height:1px; background:var(--rule); }
+  label { display:block; font-family:var(--sans); font-size:11px; font-weight:500; letter-spacing:1.5px; text-transform:uppercase;
+    color:var(--muted); margin:0 0 7px; }
+  input[type=email],input[type=password] { width:100%; padding:12px 14px; margin:0 0 16px; background:var(--field);
+    border:1px solid var(--field-edge); border-radius:12px; color:var(--ink); font-family:var(--serif); font-size:15px;
+    outline:none; transition:border-color 120ms ease, box-shadow 120ms ease; }
+  input::placeholder { color:var(--faint); opacity:.8; }
+  input[type=email]:focus,input[type=password]:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--focus-ring); }
+  .submit-btn { width:100%; margin-top:6px; padding:14px 16px; background:var(--cta); color:#fff; border:0; border-radius:12px;
+    box-shadow:var(--cta-shadow); font-family:var(--sans); font-size:12px; font-weight:600; letter-spacing:2px; text-transform:uppercase;
+    cursor:pointer; transition:filter 120ms ease, transform 120ms ease; }
+  .submit-btn:hover { filter:brightness(1.08); }
+  .submit-btn:active { transform:translateY(1px); }
+  .submit-btn:focus-visible,.google-btn:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 </style>
 </head>
 <body>
-<div class="card">
-  <h1 class="wordmark"><span class="brain">Brain</span><span class="tube">Tube</span></h1>
-  <p class="subtitle">Sign in to connect BrainTube to Claude.<br>Your credentials go directly to BrainTube — never through Claude.</p>
+<main class="card">
+  ${BRAND_LOCKUP}
+  <p class="eyebrow">Connect to Claude</p>
+  <h1 class="title">Bring your <em>memory</em><span class="dot">.</span></h1>
+  <p class="lede">Sign in so Claude can search your BrainTube knowledge base. Your credentials go straight to BrainTube, never through Claude.</p>
   ${errorHtml}
   <a href="/oauth/google/start?state=${esc(state)}" class="google-btn">
     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -597,32 +653,31 @@ ${BRAND_HEAD}
     <input type="password" id="password" name="password" placeholder="••••••••" required autocomplete="current-password" />
     <button type="submit" class="submit-btn">Connect to Claude</button>
   </form>
-  <p class="footer">Claude will be able to query your BrainTube knowledge base. You can disconnect any time from Claude.ai settings.</p>
-</div>
+  <p class="footer">Claude will be able to search and read your BrainTube knowledge base. You can disconnect any time in Claude's connector settings.</p>
+</main>
 </body>
 </html>`;
 }
 
-function errorPage(message: string): string {
+export function errorPage(message: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 ${BRAND_HEAD}
-<title>BrainTube — Auth Error</title>
+<title>BrainTube — sign-in error</title>
 <style>
   ${BRAND_BASE_CSS}
-  .card { text-align:left; }
-  .heading { font-family:'Fraunces',Georgia,serif; font-weight:500; font-size:20px; color:#fff; margin:0 0 12px; line-height:1.3; }
-  .message { color:#bdbdbd; font-size:14px; line-height:1.55; margin:0; }
+  .message { font-family:var(--serif); font-size:15px; line-height:1.55; color:var(--muted); margin:0; }
 </style>
 </head>
 <body>
-<div class="card">
-  <h1 class="wordmark"><span class="brain">Brain</span><span class="tube">Tube</span></h1>
-  <p class="heading">Authentication error</p>
+<main class="card">
+  ${BRAND_LOCKUP}
+  <p class="eyebrow">Sign-in error</p>
+  <h1 class="title">That didn't <em>connect</em><span class="dot">.</span></h1>
   <p class="message">${esc(message)}</p>
-  <p class="footer">Return to Claude.ai and click Connect to try again.</p>
-</div>
+  <p class="footer">Go back to Claude and click Connect to try again.</p>
+</main>
 </body>
 </html>`;
 }
