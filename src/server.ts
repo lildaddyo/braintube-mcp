@@ -28,7 +28,7 @@ import { expertiseProfileSchema, getExpertiseProfileTool, getExpertiseProfileOut
 import { sessionBriefSchema, getSessionBrief, getSessionBriefOutputSchema } from './tools/session-brief.js';
 import { listBookmarksSchema, listBookmarks, listBookmarksOutputSchema, toggleBookmarkSchema, toggleBookmark, toggleBookmarkOutputSchema } from './tools/bookmarks.js';
 import { searchObsidianSchema, searchObsidian, searchObsidianOutputSchema } from './tools/obsidian-search.js';
-import { chatWithBrainSchema, chatWithBrain, chatWithBrainOutputSchema, listBrainsSchema, listBrains, listBrainsOutputSchema } from './tools/brain-chat.js';
+import { assertBrainReachable, chatWithBrainSchema, chatWithBrain, chatWithBrainOutputSchema, listBrainsSchema, listBrains, listBrainsOutputSchema } from './tools/brain-chat.js';
 import { knowledgeGraphSchema, getKnowledgeGraph, getKnowledgeGraphOutputSchema } from './tools/knowledge-graph.js';
 import { knowledgeHealthSchema, knowledgeHealth, knowledgeHealthOutputSchema } from './tools/knowledge-health.js';
 import { knowledgeIndexSchema, getKnowledgeIndex, getKnowledgeIndexOutputSchema } from './tools/knowledge-index.js';
@@ -532,7 +532,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       outputSchema: connectReadwiseOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
-    (input) => connectReadwise(input, auth.rawToken ?? '')
+    (input) => connectReadwise(input, auth.userId, auth.rawToken)
   );
 
   server.registerTool(
@@ -543,7 +543,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       outputSchema: syncReadwiseOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: false }
     },
-    (input) => syncReadwise(input, auth.rawToken ?? '')
+    (input) => syncReadwise(input, auth.userId, auth.rawToken)
   );
 
   // ── Notion + write tools (13-14) ─────────────────────────────────────────────
@@ -790,6 +790,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       annotations: { readOnlyHint: true, openWorldHint: true }
     },
     async (input) => {
+      await assertBrainReachable(input.brain_slug, auth.userId);
       await requireFairUse(auth.userId, 'chat', 'ai_chat', 'chat_with_brain');
       return chatWithBrain(input, auth.userId);
     }
@@ -849,7 +850,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       outputSchema: exportCorpusOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
-    (input) => exportCorpus(input, auth.rawToken ?? '')
+    (input) => exportCorpus(input, auth.userId, auth.rawToken)
   );
 
   server.registerTool(
@@ -862,7 +863,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     },
     async (input) => {
       await requireCredits(auth.userId, 'ai_chat', 'compile_knowledge');
-      return compileKnowledge(input, auth.rawToken ?? '');
+      return compileKnowledge(input, auth.userId, auth.rawToken);
     }
   );
 

@@ -5,6 +5,7 @@
 
 import { z } from 'zod';
 import { dbAdmin, logMcpRetrieval } from '../db/supabase.js';
+import { actingUserHeaders } from '../lib/edge-auth.js';
 
 // ── chat_with_brain ───────────────────────────────────────────────────────────
 
@@ -38,18 +39,41 @@ const BRAIN_CHAT_URL = 'https://iqjnmmtvhyavgrsxpoao.supabase.co/functions/v1/br
  * keyed on Railway's egress IP.
  *
  * Metering happens exactly once, here in the MCP server: every chat_with_brain call site
- * runs requireFairUse('chat') first, and x-bt-fair-use: counted tells brain-chat to skip
- * its own consume_fair_use for owner calls.
+ * runs assertBrainReachable, then requireFairUse('chat'), and x-bt-fair-use: counted tells
+ * brain-chat to skip its own consume_fair_use for owner calls.
  */
 export function brainChatHeaders(userId: string): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (serviceKey) {
-    headers.Authorization = `Bearer ${serviceKey}`;
-    headers['x-bt-acting-user'] = userId;
-    headers['x-bt-fair-use'] = 'counted';
+  return actingUserHeaders(userId, { fairUseCounted: true });
+}
+
+/**
+ * Why brain-chat would refuse this caller, or null if it would serve them. Mirrors
+ * brain-chat's own 404 / 403 checks so chat_with_brain can refuse BEFORE requireFairUse
+ * charges the chat. brain-chat stays the authority; this only avoids billing a sure refusal.
+ */
+export function brainAccessError(
+  brain: { user_id: string; is_public: boolean } | null,
+  slug: string,
+  userId: string
+): string | null {
+  if (!brain) return `Brain "${slug}" not found. Use list_brains to see your Brains.`;
+  if (!brain.is_public && brain.user_id !== userId) return `Brain "${slug}" is private.`;
+  return null;
+}
+
+/** Throws (uncharged) when brain-chat would refuse; a lookup error falls through to brain-chat. */
+export async function assertBrainReachable(slug: string, userId: string): Promise<void> {
+  const { data, error } = await dbAdmin
+    .from('brains')
+    .select('user_id, is_public')
+    .eq('slug', slug)
+    .maybeSingle();
+  if (error) {
+    console.error(`[chat_with_brain] brain lookup failed, deferring to brain-chat: ${error.message}`);
+    return;
   }
-  return headers;
+  const reason = brainAccessError(data as { user_id: string; is_public: boolean } | null, slug, userId);
+  if (reason) throw new Error(reason);
 }
 
 export async function chatWithBrain(

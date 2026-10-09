@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 process.env.SUPABASE_URL ??= 'https://test.supabase.co';
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= 'test-service-role-key';
 
-const { brainChatHeaders, chatWithBrain } = await import('./brain-chat.js');
+const { brainAccessError, brainChatHeaders, chatWithBrain } = await import('./brain-chat.js');
 
 const USER = '11111111-2222-3333-4444-555555555555';
 
@@ -24,6 +24,14 @@ test('without a service key the call stays anonymous (no acting-user header to f
   } finally {
     process.env.SUPABASE_SERVICE_ROLE_KEY = prev;
   }
+});
+
+test('brainAccessError refuses, before any charge, exactly what brain-chat would refuse', () => {
+  const OTHER = '99999999-8888-7777-6666-555555555555';
+  assert.match(brainAccessError(null, 'nope', USER)!, /not found/);
+  assert.match(brainAccessError({ user_id: OTHER, is_public: false }, 'theirs', USER)!, /private/);
+  assert.equal(brainAccessError({ user_id: USER, is_public: false }, 'mine', USER), null);
+  assert.equal(brainAccessError({ user_id: OTHER, is_public: true }, 'public', USER), null);
 });
 
 test('chatWithBrain sends the acting-user headers to brain-chat', async () => {
