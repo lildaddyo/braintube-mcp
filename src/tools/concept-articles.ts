@@ -5,6 +5,7 @@
 
 import { z } from 'zod';
 import { dbAdmin } from '../db/supabase.js';
+import { edgeAuthHeaders } from '../lib/edge-auth.js';
 
 const COMPILE_KNOWLEDGE_URL =
   'https://iqjnmmtvhyavgrsxpoao.supabase.co/functions/v1/compile-knowledge';
@@ -26,17 +27,14 @@ export const compileKnowledgeOutputSchema = z.object({}).passthrough();
 
 export async function compileKnowledge(
   input: z.infer<typeof compileKnowledgeSchema>,
+  userId: string,
   userJwt?: string
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
   const body: Record<string, string> = {};
   if (input.cluster_id) body.cluster_id = input.cluster_id;
   if (input.brain_id)   body.brain_id   = input.brain_id;
 
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (userJwt) {
-    headers['Authorization'] = `Bearer ${userJwt}`;
-    headers['apikey'] = userJwt;
-  }
+  const headers = edgeAuthHeaders(userId, userJwt);
 
   const res = await fetch(COMPILE_KNOWLEDGE_URL, {
     method:  'POST',

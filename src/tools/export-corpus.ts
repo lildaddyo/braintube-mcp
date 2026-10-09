@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { edgeAuthHeaders } from '../lib/edge-auth.js';
 
 const EXPORT_CORPUS_URL =
   'https://iqjnmmtvhyavgrsxpoao.supabase.co/functions/v1/export-corpus';
@@ -9,13 +10,10 @@ export const exportCorpusOutputSchema = z.object({}).passthrough();
 
 export async function exportCorpus(
   _input: z.infer<typeof exportCorpusSchema>,
+  userId: string,
   userJwt?: string
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (userJwt) {
-    headers['Authorization'] = `Bearer ${userJwt}`;
-    headers['apikey'] = userJwt;
-  }
+  const headers = edgeAuthHeaders(userId, userJwt);
 
   const res = await fetch(EXPORT_CORPUS_URL, {
     method:  'POST',
