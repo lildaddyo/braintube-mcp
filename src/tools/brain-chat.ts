@@ -5,6 +5,7 @@
 
 import { z } from 'zod';
 import { dbAdmin, logMcpRetrieval } from '../db/supabase.js';
+import { actingUserHeaders } from '../lib/edge-auth.js';
 
 // ── chat_with_brain ───────────────────────────────────────────────────────────
 
@@ -42,14 +43,7 @@ const BRAIN_CHAT_URL = 'https://iqjnmmtvhyavgrsxpoao.supabase.co/functions/v1/br
  * brain-chat to skip its own consume_fair_use for owner calls.
  */
 export function brainChatHeaders(userId: string): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (serviceKey) {
-    headers.Authorization = `Bearer ${serviceKey}`;
-    headers['x-bt-acting-user'] = userId;
-    headers['x-bt-fair-use'] = 'counted';
-  }
-  return headers;
+  return actingUserHeaders(userId, { fairUseCounted: true });
 }
 
 /**
