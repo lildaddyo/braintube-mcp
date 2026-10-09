@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isRedirectUriAllowed, normalizeRedirectUri, verifyPkce, registerClient, getClient } from './oauth-store.js';
+import { isRedirectUriAllowed, normalizeRedirectUri, verifyPkce, registerClient, getClient, refreshFailure } from './oauth-store.js';
 import { createHash } from 'crypto';
 
 // Test inputs are assembled from char codes so this file stays plain ASCII.
@@ -312,4 +312,20 @@ test('rejects other paths and hosts around the ChatGPT callbacks', () => {
   assert.equal(isRedirectUriAllowed('http://chatgpt.com/connector/oauth/abc'), false);
   assert.equal(isRedirectUriAllowed('https://chatgpt.com/connector/oauth/abc?x=1'), false);
   assert.equal(isRedirectUriAllowed('https://chatgpt.com@evil.com/connector/oauth/abc'), false);
+});
+
+test('refreshFailure: a dead refresh token is invalid_grant with HTTP 400 (RFC 6749 5.2)', () => {
+  for (const upstream of [400, 401, 403, 404]) {
+    const f = refreshFailure(upstream);
+    assert.equal(f.status, 400, `upstream ${upstream}`);
+    assert.equal(f.body.error, 'invalid_grant');
+  }
+});
+
+test('refreshFailure: Supabase outages and rate limits keep the connector (503, retryable)', () => {
+  for (const upstream of [null, 429, 500, 502, 503, 504]) {
+    const f = refreshFailure(upstream);
+    assert.equal(f.status, 503, `upstream ${upstream}`);
+    assert.equal(f.body.error, 'temporarily_unavailable');
+  }
 });
