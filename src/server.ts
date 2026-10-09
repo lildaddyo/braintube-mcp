@@ -532,7 +532,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       outputSchema: connectReadwiseOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
     },
-    (input) => connectReadwise(input, auth.userId, auth.rawToken)
+    (input) => connectReadwise(input, auth.rawToken ?? '')
   );
 
   server.registerTool(
@@ -543,7 +543,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       outputSchema: syncReadwiseOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: false }
     },
-    (input) => syncReadwise(input, auth.userId, auth.rawToken)
+    (input) => syncReadwise(input, auth.rawToken ?? '')
   );
 
   // ── Notion + write tools (13-14) ─────────────────────────────────────────────
@@ -850,7 +850,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       outputSchema: exportCorpusOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
-    (input) => exportCorpus(input, auth.userId, auth.rawToken)
+    (input) => exportCorpus(input, auth.rawToken ?? '')
   );
 
   server.registerTool(
@@ -863,7 +863,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     },
     async (input) => {
       await requireCredits(auth.userId, 'ai_chat', 'compile_knowledge');
-      return compileKnowledge(input, auth.userId, auth.rawToken);
+      return compileKnowledge(input, auth.rawToken ?? '');
     }
   );
 
