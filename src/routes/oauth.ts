@@ -19,6 +19,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { randomBytes, createHash } from 'crypto';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import {
   registerClient,
   getClient,
@@ -26,11 +27,13 @@ import {
   consumePendingAuth,
   peekPendingAuth,
   restorePendingAuth,
+  recordFailedLogin,
   issueAuthCode,
   consumeAuthCode,
   verifyPkce,
   normalizeRedirectUri,
   refreshFailure,
+  codeBindingMatches,
 } from '../auth/oauth-store.js';
 import { BRAND_LOGO_DATA_URI } from './brand-logo.js';
 
@@ -38,6 +41,75 @@ export const oauthRouter = Router();
 
 const supabaseUrl = process.env.SUPABASE_URL!;
 const anonKey = process.env.SUPABASE_ANON_KEY!;
+
+// ─── Rate limits (BTMCP-03) ──────────────────────────────────────────────────
+// Every password login and refresh is proxied to Supabase GoTrue from this one
+// server, so GoTrue sees only Railway's egress IP and its per-IP buckets
+// (sign-in, token refresh) are shared by every connector user. Without our own
+// limits one client could drain them and lock every user out. Keys are the
+// caller's IP as Railway's edge reports it: the LAST X-Forwarded-For entry is
+// the one the edge appended (earlier entries are caller-supplied), falling back
+// to the socket address.
+
+export function clientIp(req: Request): string {
+  const xff = req.headers['x-forwarded-for'];
+  const raw = Array.isArray(xff) ? xff.join(',') : xff ?? '';
+  const last = raw.split(',').map((s) => s.trim()).filter(Boolean).pop();
+  return last ?? req.socket?.remoteAddress ?? 'unknown';
+}
+
+const ipKey = (req: Request): string => ipKeyGenerator(clientIp(req));
+
+// Password logins per caller IP. A person signing in needs a handful.
+const loginIpLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  keyGenerator: ipKey,
+  validate: { xForwardedForHeader: false, trustProxy: false },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) => {
+    res.status(429).send(errorPage('Too many sign-in attempts from this network. Please wait 15 minutes and try again.'));
+  },
+});
+
+// FAILED password logins per account email (successful logins are not counted), so
+// one account cannot be guessed at from many IPs.
+const loginEmailLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  keyGenerator: (req) => {
+    const email = (req.body as { email?: unknown } | undefined)?.email;
+    return 'email:' + (typeof email === 'string' ? email.trim().toLowerCase() : '');
+  },
+  skip: (req) => typeof (req.body as { email?: unknown } | undefined)?.email !== 'string',
+  skipSuccessfulRequests: true,
+  validate: { xForwardedForHeader: false, trustProxy: false },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) => {
+    res.status(429).send(errorPage('Too many failed sign-in attempts for this account. Please wait 15 minutes and try again.'));
+  },
+});
+
+// Refresh-token grants per caller IP. Connector refreshes come from the MCP
+// client's servers (Claude, ChatGPT), so this is set at half of GoTrue's
+// default token_refresh bucket (150 / 5 min): one source can never drain the
+// whole shared budget. Answered like any transient refresh failure (503
+// temporarily_unavailable) so clients keep their refresh token and retry.
+const refreshIpLimit = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  limit: 75,
+  keyGenerator: ipKey,
+  skip: (req) => (req.body as { grant_type?: unknown } | undefined)?.grant_type !== 'refresh_token',
+  validate: { xForwardedForHeader: false, trustProxy: false },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) => {
+    const failure = refreshFailure(429);
+    res.status(failure.status).json(failure.body);
+  },
+});
 
 function baseUrl(req: Request): string {
   const domain = process.env.RAILWAY_PUBLIC_DOMAIN;
@@ -189,12 +261,12 @@ oauthRouter.get('/oauth/authorize', (req: Request, res: Response) => {
     codeChallengeMethod: code_challenge_method ?? 'S256',
   });
 
-  res.send(loginForm(state));
+  res.send(loginForm(state, undefined, requesterOf(client.clientName, requestedRedirect)));
 });
 
 // ─── Authorization endpoint — POST processes the login form ──────────────────
 
-oauthRouter.post('/oauth/authorize', async (req: Request, res: Response) => {
+oauthRouter.post('/oauth/authorize', loginIpLimit, loginEmailLimit, async (req: Request, res: Response) => {
   const { state, email, password } = req.body as Record<string, string>;
 
   if (!state || !email || !password) {
@@ -228,9 +300,14 @@ oauthRouter.post('/oauth/authorize', async (req: Request, res: Response) => {
 
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ error_description: 'Authentication failed' })) as { error_description?: string };
-      console.warn('[oauth] login failed for', email, '—', err.error_description);
-      restorePendingAuth(pending);
-      res.send(loginForm(state, err.error_description ?? 'Invalid email or password.'));
+      // No email in the log: failed logins are where typos and other people's addresses show up.
+      console.warn('[oauth] login failed —', err.error_description);
+      if (!recordFailedLogin(pending)) {
+        res.status(401).send(errorPage('Too many failed sign-in attempts. Go back and click Connect again to start over.'));
+        return;
+      }
+      // 401 (not 200) so the per-email limiter counts it as a failure; the browser still shows the form.
+      res.status(401).send(loginForm(state, err.error_description ?? 'Invalid email or password.', requesterOfPending(pending)));
       return;
     }
 
@@ -247,7 +324,7 @@ oauthRouter.post('/oauth/authorize', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[oauth] login error:', err);
     restorePendingAuth(pending);
-    res.send(loginForm(state, 'A server error occurred. Please try again.'));
+    res.send(loginForm(state, 'A server error occurred. Please try again.', requesterOfPending(pending)));
     return;
   }
 
@@ -258,6 +335,8 @@ oauthRouter.post('/oauth/authorize', async (req: Request, res: Response) => {
     email: userEmail,
     codeChallenge: pending.codeChallenge,
     codeChallengeMethod: pending.codeChallengeMethod,
+    clientId: pending.clientId,
+    redirectUri: pending.redirectUri,
   });
 
   console.error(`[oauth] auth code issued — email: ${userEmail}`);
@@ -411,6 +490,8 @@ oauthRouter.get('/oauth/google/callback', async (req: Request, res: Response) =>
     email: tokenJson.user.email,
     codeChallenge: pending.codeChallenge,
     codeChallengeMethod: pending.codeChallengeMethod,
+    clientId: pending.clientId,
+    redirectUri: pending.redirectUri,
   });
 
   console.error(`[oauth/google/callback] auth code issued — email: ${tokenJson.user.email ?? '(no email)'}`);
@@ -438,7 +519,7 @@ oauthRouter.get('/oauth/google/callback', async (req: Request, res: Response) =>
 
 // ─── Token endpoint ───────────────────────────────────────────────────────────
 
-oauthRouter.post('/oauth/token', async (req: Request, res: Response) => {
+oauthRouter.post('/oauth/token', refreshIpLimit, async (req: Request, res: Response) => {
   const body = req.body as Record<string, string>;
   const { grant_type } = body;
 
@@ -454,6 +535,11 @@ oauthRouter.post('/oauth/token', async (req: Request, res: Response) => {
     const entry = consumeAuthCode(code);
     if (!entry) {
       res.status(400).json({ error: 'invalid_grant', error_description: 'Authorization code not found or expired (60 s TTL)' });
+      return;
+    }
+
+    if (!codeBindingMatches(entry, body)) {
+      res.status(400).json({ error: 'invalid_grant', error_description: 'Authorization code was issued to a different client or redirect_uri' });
       return;
     }
 
@@ -595,8 +681,31 @@ const BRAND_BASE_CSS = `:root {
 
 const BRAND_LOCKUP = `<div class="lockup"><img src="${BRAND_LOGO_DATA_URI}" alt="" width="34" height="33" /><span>BrainTube</span></div>`;
 
-export function loginForm(state: string, errorMsg?: string): string {
+// Who is asking for access, shown on the login form so the user can tell a
+// connection they started from one somebody sent them a link to (BTMCP-04).
+export interface Requester {
+  clientName: string;
+  redirectHost: string;
+}
+
+function requesterOf(clientName: string, redirectUri: string): Requester | undefined {
+  try {
+    return { clientName: clientName.slice(0, 100), redirectHost: new URL(redirectUri).host };
+  } catch {
+    return undefined;
+  }
+}
+
+function requesterOfPending(pending: { clientId: string; redirectUri: string }): Requester | undefined {
+  const client = getClient(pending.clientId);
+  return requesterOf(client?.clientName ?? 'MCP Client', pending.redirectUri);
+}
+
+export function loginForm(state: string, errorMsg?: string, requester?: Requester): string {
   const errorHtml = errorMsg ? `<div class="error" role="alert">${esc(errorMsg)}</div>` : '';
+  const requesterHtml = requester
+    ? `<p class="requester"><strong>${esc(requester.clientName)}</strong> is asking for access to your BrainTube knowledge base. After you sign in you will be sent to <strong>${esc(requester.redirectHost)}</strong>. Only continue if you started this connection yourself.</p>`
+    : '';
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -626,6 +735,8 @@ ${BRAND_HEAD}
   .submit-btn:hover { filter:brightness(1.08); }
   .submit-btn:active { transform:translateY(1px); }
   .submit-btn:focus-visible,.google-btn:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+  .requester { font-family:var(--serif); font-size:14px; line-height:1.5; color:var(--ink); background:var(--card);
+    border:1px solid var(--card-edge); border-radius:10px; padding:10px 12px; margin:0 0 18px; overflow-wrap:anywhere; }
 </style>
 </head>
 <body>
@@ -634,6 +745,7 @@ ${BRAND_HEAD}
   <p class="eyebrow">Connect to Claude</p>
   <h1 class="title">Bring your <em>memory</em><span class="dot">.</span></h1>
   <p class="lede">Sign in so Claude can search your BrainTube knowledge base. Your credentials go straight to BrainTube, never through Claude.</p>
+  ${requesterHtml}
   ${errorHtml}
   <a href="/oauth/google/start?state=${esc(state)}" class="google-btn">
     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">

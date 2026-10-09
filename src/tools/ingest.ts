@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { dbAdmin } from '../db/supabase.js';
-import { findItemBySourceUrl, findItemByTitle, linkTags } from '../db/supabase.js';
+import { findItemBySourceUrl, findItemByTitle, linkTags, countIngestsToday } from '../db/supabase.js';
 import { embedItem } from './embedding.js';
 import { sourceTypeEnum } from '../schemas/source-types.js';
 
@@ -32,6 +32,20 @@ export const ingestContentOutputSchema = z.object({
   title: z.string(),
   action: z.enum(['inserted', 'updated']),
 });
+
+// ─── Daily limit ──────────────────────────────────────────────────────────────
+// Same cap as bulk_ingest: at most 500 NEW items per user per UTC day (updates of an
+// existing item are not counted). Without it ingest_content / POST /api/ingest let a
+// free account insert and embed without bound (BTMCP-01).
+
+export const DAILY_INGEST_LIMIT = 500;
+
+export class DailyIngestLimitError extends Error {
+  constructor() {
+    super(`Daily ingest limit reached (${DAILY_INGEST_LIMIT} new items/day). Resets at UTC midnight.`);
+    this.name = 'DailyIngestLimitError';
+  }
+}
 
 // ─── Implementation ───────────────────────────────────────────────────────────
 
@@ -78,6 +92,8 @@ export async function ingestContent(
     action = 'updated';
   } else {
     // ── INSERT new item ───────────────────────────────────────────────────
+    if ((await countIngestsToday(userId)) >= DAILY_INGEST_LIMIT) throw new DailyIngestLimitError();
+
     const { data, error } = await dbAdmin
       .from('items')
       .insert({

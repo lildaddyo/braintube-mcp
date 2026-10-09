@@ -9,6 +9,14 @@
  *   NOTION_WEBHOOK_SECRET   — signing secret from Notion webhook configuration
  *   NOTION_API_KEY          — Notion integration token (secret_...)
  *   OPENAI_API_KEY          — for re-embedding
+ *   NOTION_WEBHOOK_USER_ID  — BrainTube user id of the account that owns NOTION_API_KEY.
+ *                             Only that user's Notion items are ever updated. Unset = the
+ *                             webhook verifies and then skips every event (fail closed).
+ *
+ * Why the owner is fixed: the page is fetched with the operator-wide NOTION_API_KEY, so its
+ * text belongs to that account. Attributing by source_url alone let any user who created an
+ * item with the same URL receive the operator's page text, or have their own item overwritten
+ * (BTMCP-02).
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -105,6 +113,7 @@ Deno.serve(async (req) => {
 
   const webhookSecret = Deno.env.get("NOTION_WEBHOOK_SECRET");
   const notionKey     = Deno.env.get("NOTION_API_KEY");
+  const ownerUserId   = Deno.env.get("NOTION_WEBHOOK_USER_ID") ?? "";
   const supabaseUrl   = Deno.env.get("SUPABASE_URL")!;
   const serviceKey    = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
@@ -148,6 +157,13 @@ Deno.serve(async (req) => {
     });
   }
 
+  if (!ownerUserId) {
+    console.warn("[notion-webhook] NOTION_WEBHOOK_USER_ID not set — skipping (cannot attribute safely)");
+    return new Response(JSON.stringify({ skipped: true, reason: "owner not configured" }), {
+      headers: { ...CORS, "Content-Type": "application/json" },
+    });
+  }
+
   const db = createClient(supabaseUrl, serviceKey);
 
   try {
@@ -164,13 +180,16 @@ Deno.serve(async (req) => {
       });
     }
 
-    // 2. Find owning user by source_url match — the user who originally ingested this page
+    // 2. Find the owner's Notion item for this page. Only the account that owns NOTION_API_KEY
+    //    is ever written to; another user's item with the same URL is never touched.
     const { data: existing } = await db
       .from("items")
       .select("id, user_id")
       .eq("source_url", url)
+      .eq("source_type", "notion")
+      .eq("user_id", ownerUserId)
       .limit(1)
-      .single();
+      .maybeSingle();
 
     if (!existing) {
       console.log(`[notion-webhook] No existing item for url ${url} — cannot attribute to user`);
@@ -188,7 +207,7 @@ Deno.serve(async (req) => {
       full_transcript: content,
       summary: content.slice(0, 500),
       updated_at: now,
-    }).eq("id", itemId);
+    }).eq("id", itemId).eq("user_id", ownerUserId);
 
     // 4. Re-embed
     const [[embedding]] = await generateEmbeddings([`${title}\n\n${content.slice(0, 8000)}`]);

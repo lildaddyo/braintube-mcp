@@ -1,6 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isRedirectUriAllowed, normalizeRedirectUri, verifyPkce, registerClient, getClient, refreshFailure } from './oauth-store.js';
+import {
+  isRedirectUriAllowed,
+  normalizeRedirectUri,
+  verifyPkce,
+  registerClient,
+  getClient,
+  refreshFailure,
+  storePendingAuth,
+  consumePendingAuth,
+  recordFailedLogin,
+  MAX_LOGIN_FAILURES_PER_STATE,
+  codeBindingMatches,
+} from './oauth-store.js';
 import { createHash } from 'crypto';
 
 // Test inputs are assembled from char codes so this file stays plain ASCII.
@@ -328,4 +340,32 @@ test('refreshFailure: Supabase outages and rate limits keep the connector (503, 
     assert.equal(f.status, 503, `upstream ${upstream}`);
     assert.equal(f.body.error, 'temporarily_unavailable');
   }
+});
+
+// --- BTMCP-03: a pending authorize state survives only a few wrong passwords ---
+
+test('recordFailedLogin re-stores the state until MAX_LOGIN_FAILURES_PER_STATE, then drops it', () => {
+  const base = { clientId: 'c', redirectUri: 'https://claude.ai/api/mcp/auth_callback', state: 'st-fail', codeChallenge: 'x', codeChallengeMethod: 'S256' };
+  storePendingAuth(base);
+  for (let i = 1; i < MAX_LOGIN_FAILURES_PER_STATE; i++) {
+    const pending = consumePendingAuth('st-fail');
+    assert.ok(pending, 'state should still be usable after ' + (i - 1) + ' failures');
+    assert.equal(recordFailedLogin(pending), true);
+  }
+  const last = consumePendingAuth('st-fail');
+  assert.ok(last);
+  assert.equal(recordFailedLogin(last), false);
+  assert.equal(consumePendingAuth('st-fail'), undefined);
+});
+
+// --- BTMCP-04: codes are bound to the client and redirect_uri they were issued for ---
+
+test('codeBindingMatches checks client_id and redirect_uri only when the token request sends them', () => {
+  const entry = { clientId: 'client-1', redirectUri: 'https://claude.ai/api/mcp/auth_callback' };
+  assert.equal(codeBindingMatches(entry, {}), true);
+  assert.equal(codeBindingMatches(entry, { client_id: 'client-1', redirect_uri: 'https://claude.ai/api/mcp/auth_callback' }), true);
+  assert.equal(codeBindingMatches(entry, { client_id: 'client-2' }), false);
+  assert.equal(codeBindingMatches(entry, { redirect_uri: 'https://chatgpt.com/connector_platform_oauth_redirect' }), false);
+  assert.equal(codeBindingMatches(entry, { redirect_uri: 'https://evil.example/cb' }), false);
+  assert.equal(codeBindingMatches({}, { client_id: 'anything' }), true);
 });
