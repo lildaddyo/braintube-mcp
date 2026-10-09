@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { edgeAuthHeaders } from '../lib/edge-auth.js';
 
 const READWISE_SYNC_URL =
   'https://iqjnmmtvhyavgrsxpoao.supabase.co/functions/v1/readwise-sync';
@@ -15,15 +16,12 @@ export const connectReadwiseOutputSchema = z.object({}).passthrough();
 
 export async function connectReadwise(
   input: z.infer<typeof connectReadwiseSchema>,
-  userJwt: string
+  userId: string,
+  userJwt?: string
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent?: Record<string, unknown> }> {
   const res = await fetch(READWISE_SYNC_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${userJwt}`,
-      'apikey':        userJwt,
-    },
+    headers: edgeAuthHeaders(userId, userJwt),
     body: JSON.stringify({ action: 'connect', access_token: input.access_token }),
   });
 
@@ -48,15 +46,12 @@ export const syncReadwiseOutputSchema = z.object({}).passthrough();
 
 export async function syncReadwise(
   input: z.infer<typeof syncReadwiseSchema>,
-  userJwt: string
+  userId: string,
+  userJwt?: string
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent?: Record<string, unknown> }> {
   const res = await fetch(READWISE_SYNC_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${userJwt}`,
-      'apikey':        userJwt,
-    },
+    headers: edgeAuthHeaders(userId, userJwt),
     body: JSON.stringify({ action: 'sync', mode: input.mode }),
   });
 
