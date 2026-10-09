@@ -302,7 +302,7 @@ const CARD_TOOLS = [
   },
   {
     name: 'chat_with_brain',
-    description: 'Ask a question to a public BrainTube Brain (curated knowledge base). Returns answer + source citations.',
+    description: 'Ask a question to a BrainTube Brain (curated knowledge base): any public Brain, or one of your own, including private and personal ones. Returns answer + source citations.',
     inputSchema: toInputSchema(chatWithBrainSchema),
     outputSchema: toOutputSchema(chatWithBrainOutputSchema),
     annotations: { readOnlyHint: true, openWorldHint: true },

@@ -335,7 +335,7 @@ restRouter.get('/brains', async (req, res) => {
 /**
  * POST /api/brain-chat/:slug
  * Body: { question: string, chat_history?: [{role, content}][], session_id?: string }
- * Query a public Brain by its slug.
+ * Query a public Brain, or one of the caller's own, by its slug.
  */
 restRouter.post('/brain-chat/:slug', async (req, res) => {
   const brain_slug = req.params.slug;

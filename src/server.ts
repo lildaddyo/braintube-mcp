@@ -784,7 +784,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'chat_with_brain',
     {
-      description: 'Ask a question to a public BrainTube Brain (a curated knowledge base built from someone\'s corpus). Pass the brain_slug (visible in the Brain\'s URL), your question, and optionally prior chat_history for multi-turn conversations. Returns answer + source citations.',
+      description: 'Ask a question to a BrainTube Brain (a curated knowledge base built from someone\'s corpus): any public Brain, or one of your own, including private and personal Brains listed by list_brains. Pass the brain_slug (visible in the Brain\'s URL), your question, and optionally prior chat_history for multi-turn conversations. Returns answer + source citations.',
       inputSchema: chatWithBrainSchema,
       outputSchema: chatWithBrainOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: true }

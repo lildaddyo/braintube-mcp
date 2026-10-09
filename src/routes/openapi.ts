@@ -412,7 +412,7 @@ export function buildOpenApiSpec(baseUrl: string, version: string) {
       '/api/brain-chat/{slug}': {
         post: {
           operationId: 'chatWithBrain',
-          summary: 'Chat with a public Brain',
+          summary: 'Chat with a public Brain or one of your own',
           description: 'Ask a question to a BrainTube Brain. Returns an answer with source citations. No extra auth required beyond the standard bearer token.',
           tags: ['Brains'],
           parameters: [
