@@ -33,3 +33,13 @@ test('OAuth pages still escape state and messages', () => {
   assert.ok(!errorPage('<b>bad</b>').includes('<b>bad'));
   assert.ok(loginForm('s1', '<i>e</i>').includes('&lt;i&gt;e&lt;/i&gt;'));
 });
+
+// --- BTMCP-04: the login form names who is asking and where the code goes ---
+
+test('loginForm shows the requesting client and redirect host, escaped, when given', () => {
+  const html = loginForm('s1', undefined, { clientName: 'Evil <b>Co</b>', redirectHost: 'chatgpt.com' });
+  assert.ok(html.includes('Evil &lt;b&gt;Co&lt;/b&gt;'));
+  assert.ok(html.includes('<strong>chatgpt.com</strong>'));
+  assert.ok(html.includes('Only continue if you started this connection yourself'));
+  assert.ok(!loginForm('s1').includes('class="requester"'));
+});

@@ -14,7 +14,7 @@ import { listBookmarks, toggleBookmark } from '../tools/bookmarks.js';
 import { getExpertiseProfileTool } from '../tools/expertise-profile.js';
 import { getRecentConversations } from '../tools/recent-conversations.js';
 import { getSessionBrief } from '../tools/session-brief.js';
-import { ingestContent } from '../tools/ingest.js';
+import { ingestContent, DailyIngestLimitError } from '../tools/ingest.js';
 import { bulkIngest } from '../tools/bulk-ingest.js';
 import { tagItem } from '../tools/tag-item.js';
 import { addNote } from '../tools/note.js';
@@ -52,6 +52,10 @@ function parseIntQ(val: unknown, fallback: number): number {
 function send500(res: express.Response, err: unknown): void {
   const msg = err instanceof Error ? err.message : String(err);
   console.error('[REST]', msg);
+  if (err instanceof DailyIngestLimitError) {
+    res.status(429).json({ error: msg });
+    return;
+  }
   if (msg.startsWith('MCP access requires') || msg.startsWith('Monthly query limit')) {
     res.status(402).json({ error: msg });
     return;

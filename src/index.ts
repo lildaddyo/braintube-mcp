@@ -19,10 +19,11 @@ import { glamaRouter } from './routes/glama.js';
 import { restRouter } from './routes/rest.js';
 import { sessionIngestBodyParser, sessionIngestRouter } from './routes/session-ingest.js';
 import { buildOpenApiSpec } from './routes/openapi.js';
-import { ingestContent } from './tools/ingest.js';
+import { ingestContent, DailyIngestLimitError } from './tools/ingest.js';
 import { summariseConversation } from './tools/summarise.js';
 import { backfillEmbeddings } from './tools/embedding.js';
 import { validateMcpOrigin } from './security/origin.js';
+import { resolveUserRole } from './security/tool-access.js';
 import type { AuthContext } from './types.js';
 
 // Resolve package.json relative to this file so /health reports the actual
@@ -164,7 +165,22 @@ app.use('/api/session-ingest', sessionIngestRouter);
 // hit the same McpServer instance that handled `initialize`.
 // Without this, each POST creates a fresh uninitialized server and tools/list
 // returns [] because the MCP state machine rejects calls before initialize.
-const mcpSessions = new Map<string, StreamableHTTPServerTransport>();
+// Each entry remembers the user that initialized it: the server behind it was built with
+// that user's auth and role, so a request from anyone else must never reach it (BTMCP-05).
+interface McpSessionEntry {
+  transport: StreamableHTTPServerTransport;
+  userId: string;
+}
+const mcpSessions = new Map<string, McpSessionEntry>();
+
+/** The live transport for this session id, only if `userId` is the user who created it. */
+function ownedSession(sessionId: string, userId: string): StreamableHTTPServerTransport | undefined {
+  const entry = mcpSessions.get(sessionId);
+  return entry && entry.userId === userId ? entry.transport : undefined;
+}
+
+/** Session ids act as bearer handles for a live session; log only a short prefix. */
+const shortId = (sessionId: string): string => sessionId.slice(0, 8);
 
 // Prune the session store hourly to avoid unbounded memory growth on Railway.
 setInterval(() => {
@@ -185,12 +201,12 @@ app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
   // Express lower-cases incoming headers, so the key is 'mcp-session-id'.
   const incomingSessionId = req.headers['mcp-session-id'] as string | undefined;
   if (incomingSessionId) {
-    const existing = mcpSessions.get(incomingSessionId);
+    const existing = ownedSession(incomingSessionId, auth.userId);
     if (existing) {
       await existing.handleRequest(req, res, req.body);
       return;
     }
-    // Unknown session — client must re-initialize (e.g. after server restart).
+    // Unknown session, or one that belongs to another user — client must re-initialize (e.g. after server restart).
     res.status(404).json({
       jsonrpc: '2.0',
       error: { code: -32000, message: 'Session not found — please re-initialize.' },
@@ -203,15 +219,15 @@ app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (sessionId) => {
-      mcpSessions.set(sessionId, transport);
-      console.error(`[mcp] session created (${sessionId}) — ${mcpSessions.size} active`);
+      mcpSessions.set(sessionId, { transport, userId: auth.userId });
+      console.error(`[mcp] session created (${shortId(sessionId)}…) — ${mcpSessions.size} active`);
     },
   });
 
   transport.onclose = () => {
     if (transport.sessionId) {
       mcpSessions.delete(transport.sessionId);
-      console.error(`[mcp] session closed (${transport.sessionId}) — ${mcpSessions.size} active`);
+      console.error(`[mcp] session closed (${shortId(transport.sessionId)}…) — ${mcpSessions.size} active`);
     }
   };
 
@@ -222,9 +238,10 @@ app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
 
 app.get('/mcp', mcpBrowserLanding, requireAuth, mcpRateLimit, async (req, res) => {
   // GET is used by clients that open a persistent SSE stream for server→client pushes.
+  const auth = (req as express.Request & { auth: AuthContext }).auth;
   const incomingSessionId = req.headers['mcp-session-id'] as string | undefined;
   if (incomingSessionId) {
-    const existing = mcpSessions.get(incomingSessionId);
+    const existing = ownedSession(incomingSessionId, auth.userId);
     if (existing) {
       await existing.handleRequest(req, res);
       return;
@@ -244,7 +261,7 @@ app.get('/mcp-url', requireAuth, (req, res) => {
   const mcpUrl = `${baseUrl}/mcp`;
 
   // Log auth method for debugging (never log the JWT itself or userId)
-  console.error(`[mcp-url] request — method: ${auth.authMethod}, email: ${auth.email ?? 'unknown'}`);
+  console.error(`[mcp-url] request — method: ${auth.authMethod}, user: ${auth.userId.slice(0, 8)}`);
 
   res.json({
     mcp_url: mcpUrl,
@@ -315,7 +332,7 @@ app.post('/api/extension-ingest', requireAuth, mcpRateLimit, extensionCaptureDai
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[extension-ingest] error:', msg);
-    res.status(500).json({ error: msg });
+    res.status(err instanceof DailyIngestLimitError ? 429 : 500).json({ error: msg });
   }
 });
 
@@ -325,7 +342,14 @@ app.post('/api/extension-ingest', requireAuth, mcpRateLimit, extensionCaptureDai
 // Use this when backfill_embeddings is beyond the 15-tool cap in claude.ai.
 app.post('/api/backfill', requireAuth, async (req, res) => {
   const auth = (req as express.Request & { auth: AuthContext }).auth;
-  const batchSize = parseInt((req.query.batch_size as string) ?? '20', 10);
+  // Same tier as the backfill_embeddings MCP tool (admin): this route used to let any signed-in
+  // account run paid embeddings with an unbounded batch size (BTMCP-07).
+  if ((await resolveUserRole(auth.userId)) !== 'admin') {
+    res.status(403).json({ ok: false, error: 'backfill is restricted to administrators' });
+    return;
+  }
+  const requested = parseInt((req.query.batch_size as string) ?? '20', 10);
+  const batchSize = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 50) : 20;
   console.error(`[backfill] starting for user ${auth.userId}, batchSize=${batchSize}`);
   try {
     const result = await backfillEmbeddings(auth.userId, batchSize);

@@ -170,7 +170,13 @@ export interface PendingAuth {
   codeChallenge: string;
   codeChallengeMethod: string;
   createdAt: number;
+  /** Failed password attempts against this state so far (see MAX_LOGIN_FAILURES_PER_STATE). */
+  failedAttempts?: number;
 }
+
+// A pending authorize request survives at most this many wrong passwords; after that the
+// state is dropped and the user has to click Connect again (BTMCP-03).
+export const MAX_LOGIN_FAILURES_PER_STATE = 5;
 
 const pendingAuths = new Map<string, PendingAuth>();
 
@@ -207,6 +213,15 @@ export function restorePendingAuth(data: PendingAuth): void {
   pendingAuths.set(data.state, data);
 }
 
+// After a wrong password: count the failure and re-store the state so the user can retry,
+// unless the state has used up its attempts. Returns false when the state was dropped.
+export function recordFailedLogin(data: PendingAuth): boolean {
+  const failedAttempts = (data.failedAttempts ?? 0) + 1;
+  if (failedAttempts >= MAX_LOGIN_FAILURES_PER_STATE) return false;
+  pendingAuths.set(data.state, { ...data, failedAttempts });
+  return true;
+}
+
 // ─── Auth codes (code → Supabase token pair, single-use, 60 s TTL) ────────────
 // Issued after successful login, consumed by the MCP client's token request.
 
@@ -217,6 +232,9 @@ export interface AuthCodeEntry {
   email: string | undefined;
   codeChallenge: string;
   codeChallengeMethod: string;
+  /** The client and redirect_uri the code was issued for (checked at /oauth/token when sent). */
+  clientId?: string;
+  redirectUri?: string;
   createdAt: number;
 }
 
@@ -277,4 +295,22 @@ export function refreshFailure(upstreamStatus: number | null): RefreshFailure {
     status: 503,
     body: { error: 'temporarily_unavailable', error_description: 'Could not refresh the token right now. Try again shortly.' },
   };
+}
+
+// ─── Code binding at the token endpoint (RFC 6749 §4.1.3) ────────────────────
+// A code may only be redeemed by the client it was issued to, with the same
+// redirect_uri. Both are checked only when the token request carries them, so
+// clients that rely on PKCE alone keep working.
+
+export function codeBindingMatches(
+  entry: Pick<AuthCodeEntry, 'clientId' | 'redirectUri'>,
+  sent: { client_id?: unknown; redirect_uri?: unknown },
+): boolean {
+  if (typeof sent.client_id === 'string' && sent.client_id !== '' && entry.clientId !== undefined) {
+    if (sent.client_id !== entry.clientId) return false;
+  }
+  if (typeof sent.redirect_uri === 'string' && sent.redirect_uri !== '' && entry.redirectUri !== undefined) {
+    if (normalizeRedirectUri(sent.redirect_uri) !== entry.redirectUri) return false;
+  }
+  return true;
 }

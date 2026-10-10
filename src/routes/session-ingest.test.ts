@@ -7,7 +7,7 @@ import { performance } from 'node:perf_hooks';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { EmbedFn } from './session-ingest.js';
+import type { EmbedFn, QuotaFn } from './session-ingest.js';
 
 // src/db/supabase.ts builds its client lazily, but keep the dummy env the other tests use so a
 // stray real call could never reach a real project. Nothing here touches the network except
@@ -31,6 +31,15 @@ const {
   embeddingInput,
   sessionIngestBodyParser,
   createSessionIngest,
+  DAILY_ROUND_LIMIT,
+  DAILY_EST_TOKEN_LIMIT,
+  judgeQuota,
+  limitsForRole,
+  withUserLock,
+  FREE_LIMITS,
+  PAID_LIMITS,
+  usageToday,
+  utcDayStart,
 } = await import('./session-ingest.js');
 
 // ---------------------------------------------------------------------------------------------
@@ -162,6 +171,10 @@ class FakeQuery implements PromiseLike<Result> {
     this.filters.push((r) => vs.includes(r[col]));
     return this;
   }
+  gte(col: string, v: string): this {
+    this.filters.push((r) => typeof r[col] === 'string' && (r[col] as string) >= v);
+    return this;
+  }
   order(col: string, o: { ascending?: boolean } = {}): this {
     this.orderCol = col;
     this.orderAsc = o.ascending !== false;
@@ -235,6 +248,7 @@ class FakeQuery implements PromiseLike<Result> {
             last_message_uuid: null,
             occurred_at: null,
             embedding: null,
+            created_at: new Date().toISOString(),
           };
     return { ...base, ...row };
   }
@@ -345,6 +359,8 @@ interface HarnessOptions {
   embed?: EmbedFn;
   /** Runs between the parsers and the router (used to sabotage req.body). */
   beforeRouter?: express.RequestHandler;
+  /** Daily quota check. Default: always allow; 'real' uses the router's own DB-backed check. */
+  quota?: QuotaFn | 'real';
 }
 
 async function withServer(opts: HarnessOptions, run: (h: Harness) => Promise<void>): Promise<void> {
@@ -356,7 +372,9 @@ async function withServer(opts: HarnessOptions, run: (h: Harness) => Promise<voi
       embedCalls.push(inputs);
       return inputs.map((_, i) => unitVector(i));
     });
-  const svc = createSessionIngest({ db: db as unknown as SupabaseClient, embed });
+  const allowAll: QuotaFn = async () => ({ ok: true });
+  const quota = opts.quota === 'real' ? undefined : opts.quota ?? allowAll;
+  const svc = createSessionIngest({ db: db as unknown as SupabaseClient, embed, ...(quota ? { quota } : {}) });
   const userId = opts.userId === undefined ? 'user-A' : opts.userId;
 
   // Stand-in for requireAuth: all that matters here is that the router only ever reads req.auth.
@@ -1441,4 +1459,114 @@ test('src/index.ts registers the 5 MB parser before the global parser, and the r
   assert.ok(apiLayer < mount, 'the router must be mounted after the /api auth + rate-limit layer');
   const registrations = src.match(/app\.\w+\('\/api\/session-ingest'/g) ?? [];
   assert.equal(registrations.length, 2, 'expected exactly the parser line and the mount line');
+});
+
+// ===============================================================================================
+// Daily quota (BTMCP-01)
+// ===============================================================================================
+
+test('judgeQuota allows up to the limits and rejects past them', () => {
+  assert.deepEqual(judgeQuota({ rounds: 0, estTokens: 0 }, { rounds: 1, estTokens: 1 }), { ok: true });
+  assert.deepEqual(judgeQuota({ rounds: DAILY_ROUND_LIMIT - 1, estTokens: 0 }, { rounds: 1, estTokens: 0 }), { ok: true });
+  assert.deepEqual(judgeQuota({ rounds: DAILY_ROUND_LIMIT - 1, estTokens: 0 }, { rounds: 2, estTokens: 0 }), {
+    ok: false,
+    error: 'daily_round_limit',
+    limit: DAILY_ROUND_LIMIT,
+  });
+  assert.deepEqual(judgeQuota({ rounds: 1, estTokens: DAILY_EST_TOKEN_LIMIT }, { rounds: 1, estTokens: 1 }), {
+    ok: false,
+    error: 'daily_token_limit',
+    limit: DAILY_EST_TOKEN_LIMIT,
+  });
+});
+
+test('usageToday counts only this user\'s rounds created since UTC midnight', async () => {
+  const db = new FakeDb();
+  const now = new Date('2026-10-09T12:00:00Z');
+  const today = '2026-10-09T01:00:00.000Z';
+  const yesterday = '2026-10-08T23:59:59.000Z';
+  db.tables.session_rounds.push(
+    { session_id: 's', user_id: 'user-A', round_no: 0, est_tokens: 10, created_at: today },
+    { session_id: 's', user_id: 'user-A', round_no: 1, est_tokens: null, created_at: today },
+    { session_id: 's', user_id: 'user-A', round_no: 2, est_tokens: 99, created_at: yesterday },
+    { session_id: 't', user_id: 'user-B', round_no: 0, est_tokens: 50, created_at: today },
+  );
+  assert.equal(utcDayStart(now), '2026-10-09T00:00:00.000Z');
+  assert.deepEqual(await usageToday(db as unknown as SupabaseClient, 'user-A', now), { rounds: 2, estTokens: 10 });
+});
+
+test('POST answers 429 and writes nothing when the daily quota says no', async () => {
+  const quota: QuotaFn = async () => ({ ok: false, error: 'daily_round_limit', limit: DAILY_ROUND_LIMIT });
+  await withServer({ quota }, async (h) => {
+    const res = await post(h.base, payload());
+    assert.equal(res.status, 429);
+    assert.deepEqual(await asJson(res), { error: 'daily_round_limit', limit: DAILY_ROUND_LIMIT, resets: 'utc_midnight' });
+    assert.deepEqual(h.db.ops, []);
+    assert.equal(h.embedCalls.length, 0);
+  });
+});
+
+test('the real quota check stops a user at the daily round limit, other users are unaffected', async () => {
+  const db = new FakeDb();
+  const now = new Date().toISOString();
+  for (let i = 0; i < DAILY_ROUND_LIMIT; i++) {
+    db.tables.session_rounds.push({ session_id: 'old', user_id: 'user-A', round_no: i, est_tokens: 1, created_at: now });
+  }
+  await withServer({ db, quota: 'real' }, async (h) => {
+    const res = await post(h.base, payload());
+    assert.equal(res.status, 429);
+    assert.equal((await asJson(res)).error, 'daily_round_limit');
+    assert.equal(h.db.tables.claude_sessions.length, 0);
+  });
+  await withServer({ db, quota: 'real', userId: 'user-B' }, async (h) => {
+    const res = await post(h.base, payload());
+    assert.equal(res.status, 200);
+  });
+});
+
+test('the real quota check answers 500 stage=quota_check when the database fails, and writes nothing', async () => {
+  await withServer({ quota: 'real' }, async (h) => {
+    h.db.failures.push({ table: 'session_rounds', op: 'select', code: '57014' });
+    const res = await post(h.base, payload());
+    assert.equal(res.status, 500);
+    assert.equal((await asJson(res)).stage, 'quota_check');
+    assert.equal(h.db.tables.claude_sessions.length, 0);
+  });
+});
+
+test('limitsForRole: premium and admin get the full quota, free accounts a fifth', () => {
+  assert.deepEqual(limitsForRole('admin'), PAID_LIMITS);
+  assert.deepEqual(limitsForRole('premium'), PAID_LIMITS);
+  assert.deepEqual(limitsForRole('authenticated'), FREE_LIMITS);
+  assert.ok(FREE_LIMITS.rounds < PAID_LIMITS.rounds && FREE_LIMITS.estTokens < PAID_LIMITS.estTokens);
+  assert.deepEqual(judgeQuota({ rounds: FREE_LIMITS.rounds, estTokens: 0 }, { rounds: 1, estTokens: 0 }, FREE_LIMITS), {
+    ok: false, error: 'daily_round_limit', limit: FREE_LIMITS.rounds,
+  });
+  assert.deepEqual(judgeQuota({ rounds: FREE_LIMITS.rounds, estTokens: 0 }, { rounds: 1, estTokens: 0 }, PAID_LIMITS), { ok: true });
+});
+
+test('withUserLock serialises calls per user, keeps users independent and survives a failure', async () => {
+  const locks = new Map<string, Promise<unknown>>();
+  const order: string[] = [];
+  const slow = (tag: string, ms: number) => async () => {
+    order.push(tag + ':start');
+    await new Promise((r) => setTimeout(r, ms));
+    order.push(tag + ':end');
+    return tag;
+  };
+  const failing = async () => { order.push('f:start'); throw new Error('boom'); };
+  const results = await Promise.allSettled([
+    withUserLock(locks, 'u1', slow('a', 30)),
+    withUserLock(locks, 'u1', failing),
+    withUserLock(locks, 'u1', slow('b', 5)),
+    withUserLock(locks, 'u2', slow('c', 5)),
+  ]);
+  assert.equal(results[0].status, 'fulfilled');
+  assert.equal(results[1].status, 'rejected');
+  assert.equal(results[2].status, 'fulfilled');
+  // u1's calls never overlap; u2 is not blocked behind u1.
+  const u1 = order.filter((e) => !e.startsWith('c:'));
+  assert.deepEqual(u1, ['a:start', 'a:end', 'f:start', 'b:start', 'b:end']);
+  assert.ok(order.indexOf('c:end') < order.indexOf('a:end'));
+  assert.equal(locks.size, 0);
 });

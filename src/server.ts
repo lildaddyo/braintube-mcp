@@ -1003,7 +1003,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       outputSchema: getEdgeHistoryOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
-    (input) => getEdgeHistory(input)
+    (input) => getEdgeHistory(input, auth.userId)
   );
 
   // ── Security admin tools (43-45) ─────────────────────────────────────────────
