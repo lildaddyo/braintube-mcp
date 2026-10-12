@@ -85,7 +85,7 @@ export async function deepSearch(
   if (candidates.size > 0) {
     const { data: owned, error: ownErr } = await dbAdmin
       .from('items')
-      .select('id, source_type')
+      .select('id, source_type').eq('is_adult', false)
       .in('id', [...candidates.keys()])
       .eq('user_id', userId)
       .eq('is_archived', false);

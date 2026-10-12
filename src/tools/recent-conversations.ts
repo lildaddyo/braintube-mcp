@@ -31,7 +31,7 @@ export async function getRecentConversations(
 
   const { data, error } = await dbAdmin
     .from('items')
-    .select('id, title, summary, source_url, created_at')
+    .select('id, title, summary, source_url, created_at').eq('is_adult', false)
     .eq('user_id', userId)
     .eq('is_archived', false)
     .in('source_type', ['claude', 'chatgpt'])

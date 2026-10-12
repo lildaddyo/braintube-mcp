@@ -200,7 +200,7 @@ async function main() {
   // Fetch yesterday items for this user
   const { data: candidates, error: fetchErr } = await db
     .from("items")
-    .select("id, title, source_type, source_url, url, summary, full_transcript, taint_level, created_at")
+    .select("id, title, source_type, source_url, url, summary, full_transcript, taint_level, created_at").eq('is_adult', false)
     .eq("user_id", RND_USER_ID)
     .eq("is_archived", false)
     .gte("created_at", start)

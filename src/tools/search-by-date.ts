@@ -62,7 +62,7 @@ export async function searchByDate(input: z.infer<typeof searchByDateSchema>, us
   const q = `%${query}%`;
   const { data, error } = await dbAdmin
     .from('items')
-    .select('id, video_id, source_type, title, channel, url, description, summary, taint_level, created_at')
+    .select('id, video_id, source_type, title, channel, url, description, summary, taint_level, created_at').eq('is_adult', false)
     .eq('user_id', userId)
     .eq('is_archived', false)
     .gte('created_at', afterDate.toISOString())

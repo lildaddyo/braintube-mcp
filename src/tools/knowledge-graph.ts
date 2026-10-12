@@ -67,7 +67,7 @@ async function fetchEdgesForIds(ids: string[]): Promise<KnowledgeEdge[]> {
   ])];
   const { data: itemRows } = await dbAdmin
     .from('items')
-    .select('id, title')
+    .select('id, title').eq('is_adult', false)
     .in('id', referencedIds);
 
   const titleMap = new Map<string, string>(
@@ -93,7 +93,7 @@ export async function getKnowledgeGraph(
   // Verify the center item belongs to this user
   const { data: centerData, error: centerError } = await dbAdmin
     .from('items')
-    .select('id, title, source_type, salience_score')
+    .select('id, title, source_type, salience_score').eq('is_adult', false)
     .eq('id', item_id)
     .eq('user_id', userId)
     .single();
@@ -155,7 +155,7 @@ export async function getKnowledgeGraph(
   if (neighbourIds.length > 0) {
     const { data: itemsData } = await dbAdmin
       .from('items')
-      .select('id, title, source_type, salience_score')
+      .select('id, title, source_type, salience_score').eq('is_adult', false)
       .in('id', neighbourIds)
       .eq('user_id', userId);
 

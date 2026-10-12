@@ -139,7 +139,7 @@ async function hydratePhraseOnly(phraseIds: string[], adaptive: AdaptiveResult[]
   try {
     const { data, error } = await dbAdmin
       .from('items')
-      .select('id, title, url, source_type, channel, summary, summary_oneliner, topic_primary, key_concepts, entities, tags, created_at')
+      .select('id, title, url, source_type, channel, summary, summary_oneliner, topic_primary, key_concepts, entities, tags, created_at').eq('is_adult', false)
       .in('id', ids)
       .eq('user_id', userId)
       .abortSignal(AbortSignal.timeout(1500));
