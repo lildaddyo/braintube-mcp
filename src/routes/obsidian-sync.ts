@@ -1,4 +1,3 @@
-import { createHash } from 'crypto';
 import type express from 'express';
 import { dbAdmin } from '../db/supabase.js';
 import { embedItem } from '../tools/embedding.js';
@@ -15,37 +14,6 @@ interface ObsidianNote {
 
 interface SyncBody {
   notes: ObsidianNote[];
-}
-
-// ─── API key auth helper ──────────────────────────────────────────────────────
-
-async function resolveApiKey(token: string): Promise<string | null> {
-  const hash = createHash('sha256').update(token).digest('hex');
-
-  const { data } = await dbAdmin
-    .from('api_keys')
-    .select('user_id')
-    .eq('key_hash', hash)
-    .eq('is_active', true)
-    .single();
-
-  if (!data) return null;
-
-  // Fire-and-forget last_used update
-  void dbAdmin
-    .from('api_keys')
-    .update({ last_used: new Date().toISOString() })
-    .eq('key_hash', hash)
-    .then(
-      ({ error }) => {
-        if (error) console.error(`[obsidian-sync] last_used update failed for key hash ${hash.slice(0, 8)}…: ${error.message}`);
-      },
-      (err: unknown) => {
-        console.error(`[obsidian-sync] last_used update threw for key hash ${hash.slice(0, 8)}…: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    );
-
-  return data.user_id as string;
 }
 
 // ─── Tag helper ───────────────────────────────────────────────────────────────
@@ -117,17 +85,11 @@ export async function handleObsidianSync(
   res: express.Response
 ): Promise<void> {
   // ── Auth ──────────────────────────────────────────────────────────────────
-  const authHeader = (req.headers.authorization as string | undefined) ?? '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-
-  if (!token) {
-    res.status(401).json({ error: 'Missing API key', hint: 'Authorization: Bearer bt_...' });
-    return;
-  }
-
-  const userId = await resolveApiKey(token);
+  // requireAuth runs first on every /api route (index.ts) and accepts a bt_ key as a Bearer token or in
+  // X-BrainTube-Token. This route used to check the key a second time with its own copy of the lookup.
+  const userId = (req as express.Request & { auth?: { userId?: string } }).auth?.userId;
   if (!userId) {
-    res.status(401).json({ error: 'Invalid API key' });
+    res.status(401).json({ error: 'Missing API key', hint: 'Authorization: Bearer bt_...' });
     return;
   }
 
