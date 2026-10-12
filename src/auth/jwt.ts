@@ -95,8 +95,10 @@ export async function getAuthContext(req: Request): Promise<AuthContext | null> 
   // Method 1: Authorization: Bearer <jwt>
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith('Bearer ')) {
-    const token = authHeader.slice(7);
-    const ctx = await validateJWT(token);
+    const token = authHeader.slice(7).trim();
+    // An API key sent as a Bearer token (the Obsidian plugin and the CLI do this) is a key, not a JWT.
+    // Before this, such a request died here with 401 and never reached /api/obsidian-sync.
+    const ctx = token.startsWith('bt_') ? await validateApiKey(token) : await validateJWT(token);
     if (ctx) return ctx;
   }
 
