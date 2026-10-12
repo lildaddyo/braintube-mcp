@@ -46,7 +46,7 @@ export async function semanticSearch(query: string, userId: string, limit = 5) {
   const q = `%${query}%`;
   const { data, error } = await dbAdmin
     .from('items')
-    .select('id, video_id, source_type, title, channel, url, description, summary, taint_level, created_at')
+    .select('id, video_id, source_type, title, channel, url, description, summary, taint_level, created_at').eq('is_adult', false)
     .eq('user_id', userId)
     .eq('is_archived', false)
     .or(`title.ilike.${q},description.ilike.${q},summary.ilike.${q},full_transcript.ilike.${q}`)
@@ -67,7 +67,7 @@ export async function getVideoById(id: string, userId: string) {
   // Try YouTube video_id first
   let { data, error } = await dbAdmin
     .from('items')
-    .select('*')
+    .select('*').eq('is_adult', false)
     .eq('user_id', userId)
     .eq('video_id', id)
     .single();
@@ -76,7 +76,7 @@ export async function getVideoById(id: string, userId: string) {
   if (!data) {
     ({ data, error } = await dbAdmin
       .from('items')
-      .select('*')
+      .select('*').eq('is_adult', false)
       .eq('user_id', userId)
       .eq('id', id)
       .single());
@@ -94,7 +94,7 @@ export async function getVideoById(id: string, userId: string) {
 export async function getRecentVideos(userId: string, limit = 10) {
   const { data, error } = await dbAdmin
     .from('items')
-    .select('id, video_id, source_type, title, channel, url, summary, taint_level, created_at')
+    .select('id, video_id, source_type, title, channel, url, summary, taint_level, created_at').eq('is_adult', false)
     .eq('user_id', userId)
     .eq('is_archived', false)
     .order('created_at', { ascending: false })
@@ -117,7 +117,7 @@ async function fetchAllItemsForStats(userId: string): Promise<Array<{ id: string
   for (let from = 0; ; from += STATS_PAGE_SIZE) {
     const { data, error } = await dbAdmin
       .from('items')
-      .select('id, source_type, taint_level')
+      .select('id, source_type, taint_level').eq('is_adult', false)
       .eq('user_id', userId)
       .eq('is_archived', false)
       .order('id', { ascending: true })

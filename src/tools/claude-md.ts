@@ -20,7 +20,7 @@ export async function exportClaudeMd(
     // Top 20 items by salience_score
     dbAdmin
       .from('items')
-      .select('title, summary_oneliner, topic_primary, salience_score')
+      .select('title, summary_oneliner, topic_primary, salience_score').eq('is_adult', false)
       .eq('user_id', userId)
       .eq('is_archived', false)
       .not('salience_score', 'is', null)

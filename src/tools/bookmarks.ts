@@ -32,7 +32,7 @@ export async function listBookmarks(
 
   let query = dbAdmin
     .from('items')
-    .select('id, title, source_url, source_type, tags, is_read, bookmarked_at, created_at')
+    .select('id, title, source_url, source_type, tags, is_read, bookmarked_at, created_at').eq('is_adult', false)
     .eq('user_id', userId)
     .eq('is_bookmark', true)
     .eq('is_archived', false)

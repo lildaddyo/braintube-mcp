@@ -77,7 +77,7 @@ export async function embedItem(itemId: string): Promise<void> {
   // Fetch core fields + enrichment metadata
   const { data: item, error } = await dbAdmin
     .from('items')
-    .select('id, title, summary, summary_oneliner, description, full_transcript, channel, topic_primary, topic_secondary, entities, key_concepts, content_type, domain')
+    .select('id, title, summary, summary_oneliner, description, full_transcript, channel, topic_primary, topic_secondary, entities, key_concepts, content_type, domain').eq('ai_excluded', false)
     .eq('id', itemId)
     .single();
 
@@ -181,7 +181,7 @@ export async function backfillEmbeddings(
   // Fetch all IDs upfront so offset-drift doesn't skip items
   const { data: allItems, error: fetchError } = await dbAdmin
     .from('items')
-    .select('id')
+    .select('id').eq('ai_excluded', false)
     .eq('user_id', userId)
     .is('embedding', null)
     .eq('is_archived', false)

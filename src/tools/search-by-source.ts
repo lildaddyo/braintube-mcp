@@ -52,7 +52,7 @@ export async function searchBySource(input: z.infer<typeof searchBySourceSchema>
   const q = `%${query}%`;
   const { data, error } = await dbAdmin
     .from('items')
-    .select('id, video_id, source_type, title, channel, url, description, summary, taint_level, created_at')
+    .select('id, video_id, source_type, title, channel, url, description, summary, taint_level, created_at').eq('is_adult', false)
     .eq('user_id', userId)
     .eq('source_type', source_type)
     .eq('is_archived', false)
