@@ -1,4 +1,4 @@
-﻿[build]
+[build]
 builder = "dockerfile"
 
 [deploy]
@@ -7,11 +7,3 @@ healthcheckPath = "/health"
 healthcheckTimeout = 10
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
-
-[[services]]
-name = "braintube-mcp"
-
-[[services]]
-name = "rnd-daily-cron"
-cronSchedule = "0 3 * * *"
-startCommand = "node dist/cron/rnd-daily.js"
