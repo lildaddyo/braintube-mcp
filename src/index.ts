@@ -375,8 +375,7 @@ app.post('/api/obsidian-sync', handleObsidianSync);
 // harmless (the underlying StdioServerTransport only reacts to data it's given).
 //
 // stdout is reserved exclusively for JSON-RPC frames written by StdioServerTransport.send().
-// Every console.log in this codebase's runtime graph (excluding the standalone
-// src/cron/rnd-daily.ts process, which never shares this process's stdout) was moved to
+// Every console.log in this codebase's runtime graph was moved to
 // console.error for this reason — a single stray stdout write mid-session would corrupt the
 // stdio client's JSON-RPC stream.
 //
