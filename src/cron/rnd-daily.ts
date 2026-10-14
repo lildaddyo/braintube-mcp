@@ -1,7 +1,8 @@
 ﻿/**
  * rnd-daily.ts — one-shot R&D enrichment cron.
  * Reads from `items`, writes ONLY to `rnd_daily`. Never touches `items`.
- * Railway schedule: "0 3 * * *" (03:00 UTC = 06:00 Sofia), service rnd-daily-cron, config in railway.cron.toml.
+ * Railway service rnd-daily-cron, schedule "0 3 * * *" (03:00 UTC = 06:00 Sofia). Its cron, start command and
+ * variables (references to braintube-mcp's) are service settings: new Railway services take no config file.
  */
 
 import { createClient } from "@supabase/supabase-js";
