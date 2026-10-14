@@ -1,7 +1,7 @@
 ﻿/**
  * rnd-daily.ts — one-shot R&D enrichment cron.
  * Reads from `items`, writes ONLY to `rnd_daily`. Never touches `items`.
- * Railway schedule: "0 3 * * *" (03:00 UTC = 06:00 Sofia)
+ * Railway schedule: "0 3 * * *" (03:00 UTC = 06:00 Sofia), service rnd-daily-cron, config in railway.cron.toml.
  */
 
 import { createClient } from "@supabase/supabase-js";
@@ -225,7 +225,8 @@ async function main() {
     .from("rnd_daily")
     .select("item_id")
     .eq("run_date", runDate)
-    .eq("user_id", RND_USER_ID);
+    .eq("user_id", RND_USER_ID)
+    .eq("status", "ok"); // a failed row (provider down) is retried on the next run for that date
 
   const doneIds = new Set((existing ?? []).map((r: { item_id: string }) => r.item_id));
   const todo = allowed.filter((i: { id: string }) => !doneIds.has(i.id));
