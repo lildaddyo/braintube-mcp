@@ -60,7 +60,7 @@ export function buildUsageRow(row: UsageRow, ctx: UsageContext | undefined) {
     cost_cents: row.status >= 400 || row.status === 0 ? 0 : costCents(row.model, row.inputTokens, outputTokens),
     response_status: row.status,
     latency_ms: row.latencyMs,
-    provider: 'openai',
+    // provider is a generated column (from api_name); writing it fails the insert.
     metadata: {
       ...row.metadata,
       input_tokens: row.inputTokens,
