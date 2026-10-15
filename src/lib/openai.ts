@@ -1,4 +1,8 @@
 import OpenAI from 'openai';
+import { embeddingCache, translationCache, normaliseQuery, hashKey } from './ttl-cache.js';
+
+// Texts up to this length are query-sized and get memoised; longer ones (item bodies at ingest) rarely repeat.
+const CACHEABLE_EMBED_CHARS = 2000;
 
 /**
  * Generate a text embedding via OpenAI.
@@ -13,6 +17,14 @@ import OpenAI from 'openai';
  *                   by search_knowledge_semantic and the items embedding column.
  */
 export async function generateEmbedding(text: string, dimensions?: number): Promise<number[]> {
+  if (text.length > CACHEABLE_EMBED_CHARS) return embedUncached(text, dimensions);
+  const model = process.env.EMBEDDING_MODEL ?? 'text-embedding-3-small';
+  const key = hashKey(model, String(dimensions ?? ''), normaliseQuery(text));
+  const vec = await embeddingCache.getOrCompute(key, async () => Float32Array.from(await embedUncached(text, dimensions)));
+  return Array.from(vec);
+}
+
+async function embedUncached(text: string, dimensions?: number): Promise<number[]> {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const input = text.slice(0, 8000);
   const model = process.env.EMBEDDING_MODEL ?? 'text-embedding-3-small';
@@ -31,10 +43,16 @@ export async function generateEmbedding(text: string, dimensions?: number): Prom
  * Returns null on any failure — callers must fall back to the original query.
  */
 export async function translateQueryToEnglish(text: string): Promise<string | null> {
+  const model = process.env.QUERY_TRANSLATE_MODEL ?? 'gpt-4o-mini';
+  // null (failure) is never stored, so a transient OpenAI error is retried on the next search.
+  return translationCache.getOrCompute(hashKey(model, normaliseQuery(text)), () => translateUncached(text, model));
+}
+
+async function translateUncached(text: string, model: string): Promise<string | null> {
   try {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 4000, maxRetries: 0 });
     const res = await openai.chat.completions.create({
-      model: process.env.QUERY_TRANSLATE_MODEL ?? 'gpt-4o-mini',
+      model,
       temperature: 0,
       max_tokens: 120,
       messages: [

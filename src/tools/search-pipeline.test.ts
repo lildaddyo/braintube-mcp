@@ -11,6 +11,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = ['fixture', 'service', 'role'].join('-')
 process.env.OPENAI_API_KEY = ['fixture', 'openai', 'key'].join('-');
 
 const { searchKnowledge } = await import('./search.js');
+const { clearCaches, cacheStats } = await import('../lib/ttl-cache.js');
 
 const USER = '00000000-0000-4000-8000-000000000001';
 
@@ -62,6 +63,7 @@ function route(url: URL, body: any): Response {
 }
 
 beforeEach(() => {
+  clearCaches();
   for (const k of ENV_KEYS) { savedEnv[k] = process.env[k]; delete process.env[k]; }
   fake = { calls: [], adaptive: () => [], phrases: [], items: [], window: () => [], translation: null, rerank: 'fail' };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -263,4 +265,27 @@ test('short queries skip the embedding and go straight to the keyword search', a
   const res = await searchKnowledge({ query: 'ai', limit: 3 }, USER);
   assert.match(res.content[0].text, /^No results found for "ai"/);
   assert.equal(fake.calls.filter(c => c.path.endsWith('/embeddings')).length, 0);
+});
+
+test('a repeated search is served from the caches: no second embedding or re-rank call, same result', async () => {
+  fake.adaptive = () => tenRows();
+  fake.rerank = rankBy(['a7', 'a3']);
+  const first = await searchKnowledge({ query: 'agent memory design', limit: 3 }, USER);
+  const embeds = fake.calls.filter(c => c.path.endsWith('/embeddings')).length;
+  const reranks = callsTo('/functions/v1/jev-rerank').length;
+  const second = await searchKnowledge({ query: 'agent memory design', limit: 3 }, USER);
+  assert.deepEqual(ids(second), ids(first));
+  assert.equal(fake.calls.filter(c => c.path.endsWith('/embeddings')).length, embeds);
+  assert.equal(callsTo('/functions/v1/jev-rerank').length, reranks);
+  assert.ok(cacheStats().embedding.hits >= 1 && cacheStats().rerank.hits >= 1);
+});
+
+test('a failed re-rank is not cached: the next search calls jev-rerank again', async () => {
+  fake.adaptive = () => tenRows();
+  await searchKnowledge({ query: 'agent memory design', limit: 3 }, USER);
+  const reranks = callsTo('/functions/v1/jev-rerank').length;
+  fake.rerank = rankBy(['a7']);
+  const res = await searchKnowledge({ query: 'agent memory design', limit: 3 }, USER);
+  assert.ok(callsTo('/functions/v1/jev-rerank').length > reranks);
+  assert.equal(ids(res)[0], 'a7');
 });

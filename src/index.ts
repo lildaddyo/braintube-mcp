@@ -21,6 +21,7 @@ import { sessionIngestBodyParser, sessionIngestRouter } from './routes/session-i
 import { buildOpenApiSpec } from './routes/openapi.js';
 import { ingestContent, DailyIngestLimitError } from './tools/ingest.js';
 import { summariseConversation } from './tools/summarise.js';
+import { summaryCache, hashKey, cacheStats } from './lib/ttl-cache.js';
 import { backfillEmbeddings } from './tools/embedding.js';
 import { validateMcpOrigin } from './security/origin.js';
 import { resolveUserRole } from './security/tool-access.js';
@@ -136,7 +137,8 @@ app.get('/health', (_req, res) => {
     status: 'ok',
     service: 'braintube-mcp',
     version: pkg.version,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    cache: cacheStats(),
   });
 });
 
@@ -308,10 +310,13 @@ app.post('/api/extension-ingest', requireAuth, mcpRateLimit, extensionCaptureDai
     : 'manual';
 
   try {
-    // Summarise server-side — ANTHROPIC_API_KEY never leaves the server
-    const { title, summary } = await summariseConversation(
-      conversation_text.trim(),
-      resolvedType
+    // Summarise server-side — ANTHROPIC_API_KEY never leaves the server. A conversation this user already sent
+    // (same content hash + platform) reuses its summary instead of paying Claude again; ingest still runs, so a
+    // deleted item is re-created and the dedup by source_url/title still applies.
+    const text = conversation_text.trim();
+    const { title, summary } = await summaryCache.getOrCompute(
+      hashKey(auth.userId, resolvedType, text),
+      () => summariseConversation(text, resolvedType)
     );
 
     // Use page title as a hint if the summary title extraction fails
