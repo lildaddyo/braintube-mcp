@@ -73,7 +73,9 @@ export function buildUsageRow(row: UsageRow, ctx: UsageContext | undefined) {
 
 /** Fire-and-forget insert of one cost row. Kill switch: MCP_USAGE_LOG=off. */
 export function logOpenAiUsage(row: UsageRow): void {
-  if (process.env.MCP_USAGE_LOG === 'off') return;
+  // NODE_TEST_CONTEXT is set by `node --test`: a test run on a machine with the real Supabase env
+  // vars must not write cost rows to production.
+  if (process.env.MCP_USAGE_LOG === 'off' || process.env.NODE_TEST_CONTEXT) return;
   try {
     const record = buildUsageRow(row, store.getStore());
     void Promise.resolve(dbAdmin.from('api_usage_logs').insert(record)).then(
