@@ -247,7 +247,7 @@ class FakeQuery implements PromiseLike<Result> {
             first_message_uuid: null,
             last_message_uuid: null,
             occurred_at: null,
-            embedding: null,
+            embedding_v2: null,
             created_at: new Date().toISOString(),
           };
     return { ...base, ...row };
@@ -1230,11 +1230,11 @@ test('the response is sent BEFORE embedding; the embedding lands afterwards', { 
     const res = await post(h.base, payload()); // would hang here if the route awaited the embedding
     assert.equal(res.status, 200);
     assert.equal((await asJson(res)).round_count, 1);
-    assert.equal(h.db.tables.session_rounds[0].embedding, null);
+    assert.equal(h.db.tables.session_rounds[0].embedding_v2, null);
     release();
     await h.svc.idle();
     assert.ok(embedStarted);
-    const stored = vectorOf(h.db.tables.session_rounds[0].embedding as unknown); // (narrowed to null above)
+    const stored = vectorOf(h.db.tables.session_rounds[0].embedding_v2 as unknown); // (narrowed to null above)
     assert.equal(stored.length, EMBED_DIMENSIONS);
     assert.equal(stored[0], 1);
   });
@@ -1247,7 +1247,7 @@ test('embeds only rounds whose embedding is null, as text-input human + blank li
     await h.svc.idle();
     assert.deepEqual(h.embedCalls.map((c) => c.length), [EMBED_BATCH_SIZE, 50]);
     assert.equal(h.embedCalls[0][7], 'q7\n\na7');
-    assert.ok(h.db.tables.session_rounds.every((r) => vectorOf(r.embedding).length === EMBED_DIMENSIONS));
+    assert.ok(h.db.tables.session_rounds.every((r) => vectorOf(r.embedding_v2).length === EMBED_DIMENSIONS));
 
     // Same rounds again: everything already has an embedding, so nothing is sent to OpenAI.
     await post(h.base, payload({ rounds: manyRounds(150) }));
@@ -1285,7 +1285,7 @@ test('an embedding error leaves embedding null, is not retried, still answers 20
     assert.equal(res.status, 200);
     await h.svc.idle();
     assert.equal(calls, 1);
-    assert.ok(h.db.tables.session_rounds.every((r) => r.embedding === null));
+    assert.ok(h.db.tables.session_rounds.every((r) => r.embedding_v2 === null));
     const all = h.logs.join('\n');
     assert.match(all, /embed session=[0-9a-f-]{36} embedded=0 left_null=3/);
     assert.ok(!all.includes(LEAK_SENTINEL) && !all.includes(TEXT_SENTINEL));
@@ -1303,7 +1303,7 @@ test('a failed batch does not stop the next batch', async () => {
     await post(h.base, payload({ rounds: manyRounds(150) }));
     await h.svc.idle();
     assert.equal(calls, 2);
-    const embedded = h.db.tables.session_rounds.filter((r) => r.embedding !== null).length;
+    const embedded = h.db.tables.session_rounds.filter((r) => r.embedding_v2 !== null).length;
     assert.equal(embedded, 50);
     assert.match(h.logs.join('\n'), /embedded=50 left_null=100/);
   });
@@ -1317,7 +1317,7 @@ test('a response with the wrong number or size of vectors is treated as an error
     await withServer({ embed: bad }, async (h) => {
       await post(h.base, payload({ rounds: manyRounds(2) }));
       await h.svc.idle();
-      assert.ok(h.db.tables.session_rounds.every((r) => r.embedding === null));
+      assert.ok(h.db.tables.session_rounds.every((r) => r.embedding_v2 === null));
     });
   }
 });
@@ -1336,8 +1336,8 @@ test('rounds with no text are not sent to the embedder', async () => {
     );
     await h.svc.idle();
     assert.deepEqual(h.embedCalls, [['q2\n\na2']]);
-    assert.equal(h.db.tables.session_rounds.find((r) => r.round_no === 0)?.embedding, null);
-    assert.notEqual(h.db.tables.session_rounds.find((r) => r.round_no === 2)?.embedding, null);
+    assert.equal(h.db.tables.session_rounds.find((r) => r.round_no === 0)?.embedding_v2, null);
+    assert.notEqual(h.db.tables.session_rounds.find((r) => r.round_no === 2)?.embedding_v2, null);
   });
 });
 
@@ -1349,7 +1349,7 @@ test('a database error while looking for rounds to embed still answers 200, leav
     assert.equal(res.status, 200);
     await h.svc.idle();
     assert.equal(h.embedCalls.length, 0);
-    assert.equal(h.db.tables.session_rounds[0].embedding, null);
+    assert.equal(h.db.tables.session_rounds[0].embedding_v2, null);
     assert.match(h.logs.join('\n'), /embed session=[0-9a-f-]{36} embedded=0 left_null=0/);
     assert.deepEqual(h.db.failures, []);
   });

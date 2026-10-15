@@ -39,7 +39,7 @@ export async function deepSearch(
   // must degrade to keyword search instead of returning an empty error (seen 2026-09-19).
   let directResults: AdaptiveResult[];
   try {
-    const embedding = await generateEmbedding(query, 768);
+    const embedding = await generateEmbedding(query);
     directResults = await adaptiveSearchRpc(query, embedding, userId, 10);
   } catch (err) {
     console.error('[deep_search] adaptive path threw, falling back to keyword:', err);

@@ -253,7 +253,7 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
   if (queryLongEnough && hasApiKey) {
     try {
       console.error('[search] generating 768-dim query embedding for adaptive_search…');
-      const embedding = await generateEmbedding(query, 768);
+      const embedding = await generateEmbedding(query);
       console.error(`[search] embedding generated, dims=${embedding.length}`);
 
       // cc-rrk2: always retrieve a 10-row window for the JEV re-ranker, then trim to the caller's limit below.
@@ -277,7 +277,7 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
         if (translated) {
           console.error(`[search] cross-lingual: "${translated.slice(0, 80)}"`);
           enQuery = translated;
-          enEmbedding = await generateEmbedding(translated, 768);
+          enEmbedding = await generateEmbedding(translated);
           if (phraseOn) phrasePromise = phraseRecall(enEmbedding, userId);
           const tResults = await adaptiveSearchRpc(translated, enEmbedding, userId, fetchLimit);
           results = mergeByBestScore(results, tResults, rerankOn ? Math.max(fetchLimit, 20) : fetchLimit);
@@ -292,7 +292,7 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
       if (filter && topic) {
         const have = new Set(results.slice(0, 20).map(r => r.id));
         windowPromise = (async () => {
-          const topicEmbedding = topic === query ? embedding : topic === enQuery && enEmbedding ? enEmbedding : await generateEmbedding(topic, 768);
+          const topicEmbedding = topic === query ? embedding : topic === enQuery && enEmbedding ? enEmbedding : await generateEmbedding(topic);
           return windowCandidates(topic, topicEmbedding, filter, userId, have);
         })().catch(() => [] as AdaptiveResult[]);
       }

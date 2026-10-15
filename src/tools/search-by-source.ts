@@ -20,7 +20,7 @@ export async function searchBySource(input: z.infer<typeof searchBySourceSchema>
   // ── Hybrid path: semantic (content_embedding 768) + full text, inside the source type ─────────────
   if (process.env.OPENAI_API_KEY) {
     try {
-      const embedding = await generateEmbedding(query, 768);
+      const embedding = await generateEmbedding(query);
       const rows = await windowSearchRpc(query, embedding, userId, { sources: [source_type] }, limit);
       if (rows.length > 0) {
         void incrementRetrievalStats(rows.map(r => r.id));

@@ -40,8 +40,9 @@ export const MAX_ROUNDS_PER_CALL = 200;
 export const TOOL_IO_MAX_CHARS = 8000;
 export const EMBED_INPUT_MAX_CHARS = 24000;
 export const EMBED_BATCH_SIZE = 100;
-export const EMBED_MODEL = 'text-embedding-3-small';
-export const EMBED_DIMENSIONS = 768; // session_rounds.embedding is halfvec(768)
+// Same model as every other BrainTube vector (src/lib/openai.ts); session_rounds.embedding_v2 is halfvec(1536).
+export { EMBED_MODEL, EMBED_DIMS as EMBED_DIMENSIONS } from '../lib/openai.js';
+import { EMBED_MODEL, EMBED_DIMS as EMBED_DIMENSIONS } from '../lib/openai.js';
 export const SURFACES = ['claude_ai', 'claude_code'] as const;
 export type Surface = (typeof SURFACES)[number];
 
@@ -615,11 +616,11 @@ async function writeEmbeddings(
           // Bracketed text, the same form the embed-item-content edge function writes into halfvec columns.
           const { error } = await db
             .from('session_rounds')
-            .update({ embedding: '[' + vectors[i + k].join(',') + ']' })
+            .update({ embedding_v2: '[' + vectors[i + k].join(',') + ']' })
             .eq('session_id', sessionId)
             .eq('user_id', userId)
             .eq('round_no', r.round_no)
-            .is('embedding', null);
+            .is('embedding_v2', null);
           return error ? 0 : 1;
         } catch {
           return 0;
@@ -653,7 +654,7 @@ async function embedMissing(
       .eq('session_id', sessionId)
       .eq('user_id', userId)
       .in('round_no', candidates.map((r) => r.round_no))
-      .is('embedding', null);
+      .is('embedding_v2', null);
     if (error) throw new StageError('embed_select', codeOf(error));
     const missing = new Set((data ?? []).map((row: { round_no: number }) => row.round_no));
     const todo = candidates.filter((r) => missing.has(r.round_no));

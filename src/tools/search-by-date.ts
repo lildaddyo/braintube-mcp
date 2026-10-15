@@ -28,7 +28,7 @@ export async function searchByDate(input: z.infer<typeof searchByDateSchema>, us
   // 1536-d column and filtered dates in JS, so most of an older window never reached the results.
   if (process.env.OPENAI_API_KEY) {
     try {
-      const embedding = await generateEmbedding(query, 768);
+      const embedding = await generateEmbedding(query);
       const rows = await windowSearchRpc(query, embedding, userId, { from: afterDate.toISOString(), to: beforeDate.toISOString() }, limit);
       if (rows.length > 0) {
         void incrementRetrievalStats(rows.map(r => r.id));
