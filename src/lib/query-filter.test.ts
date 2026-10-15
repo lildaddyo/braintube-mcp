@@ -56,3 +56,45 @@ test('applyFilterPrior boosts relevant in-window rows only', () => {
   assert.deepEqual(applyFilterPrior(rows, null).map(r => r.id), ['a', 'b', 'c']);
   assert.equal(inDateWindow(f!, '2026-08-01T00:00:00Z'), false);
 });
+
+// Edge cases (code-health pass 2026-10-16).
+test('year rollover: December windows end in January, "last month" in January is last December', () => {
+  assert.deepEqual(win('notes from December 2025'), { from: '2025-12-01', to: '2026-01-01', sources: [] });
+  const jan = new Date(Date.UTC(2026, 0, 10, 12));
+  const f = parseQueryFilter('what did I save last month', jan);
+  assert.equal(f?.from?.slice(0, 10), '2025-12-01');
+  assert.equal(f?.to?.slice(0, 10), '2026-01-01');
+});
+
+test('the current month is this year, a later month is last year', () => {
+  assert.equal(win('what did I save in October')?.from?.slice(0, 10), '2026-10-01');
+  assert.equal(win('what did I save in November')?.from?.slice(0, 10), '2025-11-01');
+  assert.equal(win('what did I save today')?.from?.slice(0, 10), '2026-10-15');
+  assert.equal(win('what did I save today')?.to?.slice(0, 10), '2026-10-16');
+});
+
+test('a source-only query has no date window and keeps every row in the window', () => {
+  const f = parseQueryFilter('the github repo for vector search', NOW)!;
+  assert.deepEqual(f, { from: null, to: null, sources: ['github'] });
+  assert.equal(inDateWindow(f, 'not a date'), true);
+  assert.equal(inDateWindow({ from: '2026-07-01T00:00:00.000Z', to: '2026-08-01T00:00:00.000Z', sources: [] }, 'not a date'), false);
+  assert.equal(inDateWindow({ from: '2026-07-01T00:00:00.000Z', to: '2026-08-01T00:00:00.000Z', sources: [] }, new Date(Date.UTC(2026, 6, 31, 23))), true);
+});
+
+test('applyFilterPrior: source boost, unscored rows leave the order alone, ties keep their order', () => {
+  const f = parseQueryFilter('the PDF about pricing', NOW);
+  const rows = [
+    { id: 'a', relevance_score: 0.6, source_type: 'web' },
+    { id: 'b', relevance_score: 0.55, source_type: 'pdf' },
+    { id: 'c', relevance_score: 0.55, source_type: 'web' },
+    { id: 'd', relevance_score: 0.55, source_type: 'web' },
+  ];
+  assert.deepEqual(applyFilterPrior(rows, f).map(r => r.id), ['b', 'a', 'c', 'd']);
+  const partial = [{ id: 'x', relevance_score: 0.2 }, { id: 'y', relevance_score: null, source_type: 'pdf' }];
+  assert.deepEqual(applyFilterPrior(partial, f).map(r => r.id), ['x', 'y']);
+});
+
+test('queryTopic handles Bulgarian date phrases and keeps the query when nothing is left', () => {
+  assert.equal(queryTopic('какво запазих през юли за jailbreak на AI модели?'), 'какво запазих за jailbreak на AI модели');
+  assert.equal(queryTopic('the PDF'), 'the PDF');
+});
