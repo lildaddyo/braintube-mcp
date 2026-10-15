@@ -252,7 +252,7 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
   // ── Hybrid path (vector + full-text RRF) ─────────────────────────────────────
   if (queryLongEnough && hasApiKey) {
     try {
-      console.error('[search] generating 768-dim query embedding for adaptive_search…');
+      console.error('[search] generating 1536-dim 3-large query embedding for adaptive_search…');
       const embedding = await generateEmbedding(query);
       console.error(`[search] embedding generated, dims=${embedding.length}`);
 
