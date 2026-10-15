@@ -6,7 +6,8 @@
  * Server-to-server callers — Cursor, CLI clients — send no Origin header and are
  * unaffected. Claude connectors call through Anthropic's MCP proxy, which can
  * send an anthropic.com / claude.ai origin, so those domains are allowlisted
- * (3.14.0 shipped without anthropic.com and broke Claude connections). A request that DOES carry an Origin is accepted only when that
+ * (3.14.0 shipped without anthropic.com and broke Claude connections). ChatGPT
+ * (chatgpt.com, openai.com) is allowlisted the same way. A request that DOES carry an Origin is accepted only when that
  * origin is on the allowlist below; everything else gets 403.
  */
 
@@ -20,10 +21,15 @@ const EXACT_ORIGINS = new Set([
   'https://www.brain-tube.com',
   'https://app.brain-tube.com',
   'https://mcp.brain-tube.com',
+  // ChatGPT connectors (Apps / developer mode / deep research). Before these were
+  // listed, a ChatGPT request that carried its Origin got 403 here, before the 401
+  // that starts OAuth discovery, so the connector could never sign in.
+  'https://chatgpt.com',
+  'https://openai.com',
 ]);
 
 /** Host suffixes allowed over https (subdomains only, never look-alikes). */
-const HTTPS_SUFFIXES = ['.claude.ai', '.claude.com', '.anthropic.com', '.brain-tube.com'];
+const HTTPS_SUFFIXES = ['.claude.ai', '.claude.com', '.anthropic.com', '.brain-tube.com', '.chatgpt.com', '.openai.com'];
 
 /** Non-web schemes used by browser extensions and desktop apps (Electron, Tauri). */
 const APP_SCHEMES = new Set([

@@ -43,3 +43,58 @@ test('loginForm shows the requesting client and redirect host, escaped, when giv
   assert.ok(html.includes('Only continue if you started this connection yourself'));
   assert.ok(!loginForm('s1').includes('class="requester"'));
 });
+
+// --- ChatGPT compatibility (2026-10-16) ---
+
+const { formActionCsp, appNameFor } = await import('./oauth.js');
+const HELMET_CSP = "default-src 'self';base-uri 'self';form-action 'self';frame-ancestors 'self';upgrade-insecure-requests";
+
+test('formActionCsp lets the login form redirect to the flow callback origin only', () => {
+  assert.equal(
+    formActionCsp(HELMET_CSP, 'https://chatgpt.com/connector/oauth/abc'),
+    "default-src 'self';base-uri 'self';form-action 'self' https://chatgpt.com;frame-ancestors 'self';upgrade-insecure-requests",
+  );
+  assert.ok(formActionCsp(HELMET_CSP, 'https://claude.ai/api/mcp/auth_callback').includes("form-action 'self' https://claude.ai;"));
+  assert.ok(formActionCsp(HELMET_CSP, 'http://127.0.0.1:4555/cb').includes("form-action 'self' http://127.0.0.1:4555;"));
+  assert.equal(formActionCsp(HELMET_CSP, 'not a url'), HELMET_CSP);
+});
+
+test('login form names the app the code goes to', () => {
+  assert.equal(appNameFor('chatgpt.com'), 'ChatGPT');
+  assert.equal(appNameFor('claude.ai'), 'Claude');
+  assert.equal(appNameFor('127.0.0.1:4555'), 'your AI app');
+  assert.equal(appNameFor('evilchatgpt.com'), 'your AI app');
+  const html = loginForm('s1', undefined, { clientName: 'ChatGPT', redirectHost: 'chatgpt.com' });
+  assert.ok(html.includes('Connect to ChatGPT'));
+  assert.ok(!html.includes('Connect to Claude'));
+});
+
+test('DCR honours token_endpoint_auth_method "none" (ChatGPT) and keeps client_secret_post otherwise', async () => {
+  const express = (await import('express')).default;
+  const { oauthRouter } = await import('./oauth.js');
+  const app = express();
+  app.use(express.json());
+  app.use(oauthRouter);
+  const server = app.listen(0);
+  try {
+    const port = (server.address() as { port: number }).port;
+    const reg = (body: unknown) => fetch(`http://127.0.0.1:${port}/oauth/register`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    }).then(async (r) => ({ status: r.status, json: await r.json() as Record<string, unknown> }));
+
+    const pub = await reg({ redirect_uris: ['https://chatgpt.com/connector/oauth/cb1'], client_name: 'ChatGPT', token_endpoint_auth_method: 'none' });
+    assert.equal(pub.status, 201);
+    assert.equal(pub.json.token_endpoint_auth_method, 'none');
+    assert.equal(pub.json.client_secret, undefined);
+
+    const conf = await reg({ redirect_uris: ['https://claude.ai/api/mcp/auth_callback'], client_name: 'Claude' });
+    assert.equal(conf.status, 201);
+    assert.equal(conf.json.token_endpoint_auth_method, 'client_secret_post');
+    assert.equal(typeof conf.json.client_secret, 'string');
+
+    const prm = await fetch(`http://127.0.0.1:${port}/.well-known/oauth-protected-resource/mcp`).then((r) => r.json()) as { resource: string };
+    assert.ok(prm.resource.endsWith('/mcp'));
+  } finally {
+    server.close();
+  }
+});

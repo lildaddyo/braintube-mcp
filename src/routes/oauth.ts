@@ -160,6 +160,16 @@ oauthRouter.get('/.well-known/oauth-protected-resource', (req: Request, res: Res
   });
 });
 
+// RFC 9728 §3.1 path form for the /mcp resource. MCP clients (SDK ≥ 2025-06-18)
+// try this URL before the root one; it used to 404.
+oauthRouter.get('/.well-known/oauth-protected-resource/mcp', (req: Request, res: Response) => {
+  const base = baseUrl(req);
+  res.json({
+    resource: `${base}/mcp`,
+    authorization_servers: [base],
+  });
+});
+
 // ─── OAuth Authorization Server Metadata (RFC 8414) ──────────────────────────
 // Claude.ai fetches this after reading oauth-protected-resource above.
 // Advertises the authorize, token, and DCR endpoints.
@@ -210,6 +220,12 @@ oauthRouter.post('/oauth/register', (req: Request, res: Response) => {
     redirectUris.push(normalized); // only the normalised value is stored
   }
 
+  // Honour a public client's request for token_endpoint_auth_method "none" (RFC 7591 §2).
+  // ChatGPT registers as a public PKCE client and supports only none / private_key_jwt;
+  // answering client_secret_post (as we did for everyone) hands it a method it cannot use.
+  // Anything else keeps client_secret_post, which Claude and the other clients rely on.
+  const publicClient = body.token_endpoint_auth_method === 'none';
+
   const client = registerClient(
     redirectUris,
     typeof body.client_name === 'string' ? body.client_name : 'MCP Client'
@@ -217,11 +233,11 @@ oauthRouter.post('/oauth/register', (req: Request, res: Response) => {
 
   res.status(201).json({
     client_id: client.clientId,
-    client_secret: client.clientSecret,
-    client_secret_expires_at: 0,
+    ...(publicClient ? {} : { client_secret: client.clientSecret, client_secret_expires_at: 0 }),
+    client_id_issued_at: Math.floor(client.registeredAt / 1000),
     redirect_uris: client.redirectUris,
     client_name: client.clientName,
-    token_endpoint_auth_method: 'client_secret_post',
+    token_endpoint_auth_method: publicClient ? 'none' : 'client_secret_post',
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
   });
@@ -244,7 +260,7 @@ oauthRouter.get('/oauth/authorize', (req: Request, res: Response) => {
 
   const client = getClient(client_id);
   if (!client) {
-    res.status(400).send(errorPage('Unknown client_id. Please reconnect from Claude.ai.'));
+    res.status(400).send(errorPage('Unknown client_id. Please reconnect from your AI app.'));
     return;
   }
   const requestedRedirect = normalizeRedirectUri(redirect_uri);
@@ -261,6 +277,7 @@ oauthRouter.get('/oauth/authorize', (req: Request, res: Response) => {
     codeChallengeMethod: code_challenge_method ?? 'S256',
   });
 
+  allowFormRedirectTo(res, requestedRedirect);
   res.send(loginForm(state, undefined, requesterOf(client.clientName, requestedRedirect)));
 });
 
@@ -276,7 +293,7 @@ oauthRouter.post('/oauth/authorize', loginIpLimit, loginEmailLimit, async (req: 
 
   const pending = consumePendingAuth(state);
   if (!pending) {
-    res.status(400).send(errorPage('Login session expired or invalid. Please click Connect in Claude.ai again.'));
+    res.status(400).send(errorPage('Login session expired or invalid. Please click Connect in your AI app again.'));
     return;
   }
 
@@ -307,6 +324,7 @@ oauthRouter.post('/oauth/authorize', loginIpLimit, loginEmailLimit, async (req: 
         return;
       }
       // 401 (not 200) so the per-email limiter counts it as a failure; the browser still shows the form.
+      allowFormRedirectTo(res, pending.redirectUri);
       res.status(401).send(loginForm(state, err.error_description ?? 'Invalid email or password.', requesterOfPending(pending)));
       return;
     }
@@ -324,6 +342,7 @@ oauthRouter.post('/oauth/authorize', loginIpLimit, loginEmailLimit, async (req: 
   } catch (err) {
     console.error('[oauth] login error:', err);
     restorePendingAuth(pending);
+    allowFormRedirectTo(res, pending.redirectUri);
     res.send(loginForm(state, 'A server error occurred. Please try again.', requesterOfPending(pending)));
     return;
   }
@@ -373,7 +392,7 @@ oauthRouter.get('/oauth/google/start', (req: Request, res: Response) => {
 
   const pending = peekPendingAuth(claudeState);
   if (!pending) {
-    res.status(400).send(errorPage('Authorization session expired. Please retry from Claude.'));
+    res.status(400).send(errorPage('Authorization session expired. Please retry from your AI app.'));
     return;
   }
 
@@ -422,7 +441,7 @@ oauthRouter.get('/oauth/google/callback', async (req: Request, res: Response) =>
 
   const gstate = readCookie(req, 'bt_oauth_gstate');
   if (!gstate) {
-    res.status(400).send(errorPage('Missing session cookie. Try again from Claude.'));
+    res.status(400).send(errorPage('Missing session cookie. Try again from your AI app.'));
     return;
   }
 
@@ -431,11 +450,11 @@ oauthRouter.get('/oauth/google/callback', async (req: Request, res: Response) =>
   res.clearCookie('bt_oauth_gstate', { path: '/oauth/google' });
 
   if (!entry) {
-    res.status(400).send(errorPage('Sign-in session expired. Please retry from Claude.'));
+    res.status(400).send(errorPage('Sign-in session expired. Please retry from your AI app.'));
     return;
   }
   if (Date.now() - entry.createdAt > GOOGLE_STATE_TTL_MS) {
-    res.status(400).send(errorPage('Sign-in session expired. Please retry from Claude.'));
+    res.status(400).send(errorPage('Sign-in session expired. Please retry from your AI app.'));
     return;
   }
 
@@ -610,6 +629,31 @@ oauthRouter.post('/oauth/token', refreshIpLimit, async (req: Request, res: Respo
   res.status(400).json({ error: 'unsupported_grant_type', error_description: `grant_type '${grant_type}' is not supported` });
 });
 
+// ─── Login form CSP ───────────────────────────────────────────────────────────
+// helmet's default CSP has form-action 'self'. Chromium applies form-action to
+// every redirect that follows a form POST, so the 302 from POST /oauth/authorize
+// to the client's callback (claude.ai, chatgpt.com, a loopback port) was blocked
+// in the browser and email + password sign-in never reached the client; only the
+// Google link worked. The page that holds the form now also allows the one
+// callback origin this flow redirects to (already validated against the
+// allowlist and the client's registered URIs).
+
+export function formActionCsp(currentCsp: string, redirectUri: string): string {
+  let origin: string;
+  try {
+    origin = new URL(redirectUri).origin;
+  } catch {
+    return currentCsp;
+  }
+  if (origin === 'null' || /[\s;,']/.test(origin)) return currentCsp;
+  return currentCsp.replace(/form-action 'self'/, `form-action 'self' ${origin}`);
+}
+
+function allowFormRedirectTo(res: Response, redirectUri: string): void {
+  const current = res.getHeader('Content-Security-Policy');
+  if (typeof current === 'string') res.setHeader('Content-Security-Policy', formActionCsp(current, redirectUri));
+}
+
 // ─── HTML helpers ─────────────────────────────────────────────────────────────
 
 function esc(s: string): string {
@@ -701,7 +745,18 @@ function requesterOfPending(pending: { clientId: string; redirectUri: string }):
   return requesterOf(client?.clientName ?? 'MCP Client', pending.redirectUri);
 }
 
+/** The product name shown on the login form, from the host the code is sent to. */
+export function appNameFor(redirectHost?: string): string {
+  if (!redirectHost) return 'Claude';
+  const host = redirectHost.toLowerCase().replace(/:\d+$/, '');
+  const under = (d: string) => host === d || host.endsWith(`.${d}`);
+  if (under('chatgpt.com') || under('openai.com')) return 'ChatGPT';
+  if (under('claude.ai') || under('claude.com') || under('anthropic.com')) return 'Claude';
+  return 'your AI app';
+}
+
 export function loginForm(state: string, errorMsg?: string, requester?: Requester): string {
+  const app = esc(appNameFor(requester?.redirectHost));
   const errorHtml = errorMsg ? `<div class="error" role="alert">${esc(errorMsg)}</div>` : '';
   const requesterHtml = requester
     ? `<p class="requester"><strong>${esc(requester.clientName)}</strong> is asking for access to your BrainTube knowledge base. After you sign in you will be sent to <strong>${esc(requester.redirectHost)}</strong>. Only continue if you started this connection yourself.</p>`
@@ -710,7 +765,7 @@ export function loginForm(state: string, errorMsg?: string, requester?: Requeste
 <html lang="en">
 <head>
 ${BRAND_HEAD}
-<title>Connect BrainTube to Claude</title>
+<title>Connect BrainTube to ${app}</title>
 <style>
   ${BRAND_BASE_CSS}
   .google-btn { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; padding:13px 16px;
@@ -742,9 +797,9 @@ ${BRAND_HEAD}
 <body>
 <main class="card">
   ${BRAND_LOCKUP}
-  <p class="eyebrow">Connect to Claude</p>
+  <p class="eyebrow">Connect to ${app}</p>
   <h1 class="title">Bring your <em>memory</em><span class="dot">.</span></h1>
-  <p class="lede">Sign in so Claude can search your BrainTube knowledge base. Your credentials go straight to BrainTube, never through Claude.</p>
+  <p class="lede">Sign in so ${app} can search your BrainTube knowledge base. Your credentials go straight to BrainTube, never through ${app}.</p>
   ${requesterHtml}
   ${errorHtml}
   <a href="/oauth/google/start?state=${esc(state)}" class="google-btn">
@@ -763,9 +818,9 @@ ${BRAND_HEAD}
     <input type="email" id="email" name="email" placeholder="you@example.com" required autocomplete="email" />
     <label for="password">Password</label>
     <input type="password" id="password" name="password" placeholder="••••••••" required autocomplete="current-password" />
-    <button type="submit" class="submit-btn">Connect to Claude</button>
+    <button type="submit" class="submit-btn">Connect to ${app}</button>
   </form>
-  <p class="footer">Claude will be able to search and read your BrainTube knowledge base. You can disconnect any time in Claude's connector settings.</p>
+  <p class="footer">${app} will be able to search and read your BrainTube knowledge base. You can disconnect any time in its connector settings.</p>
 </main>
 </body>
 </html>`;
@@ -788,7 +843,7 @@ ${BRAND_HEAD}
   <p class="eyebrow">Sign-in error</p>
   <h1 class="title">That didn't <em>connect</em><span class="dot">.</span></h1>
   <p class="message">${esc(message)}</p>
-  <p class="footer">Go back to Claude and click Connect to try again.</p>
+  <p class="footer">Go back to your AI app and click Connect to try again.</p>
 </main>
 </body>
 </html>`;

@@ -19,6 +19,7 @@ import { z } from 'zod';
 
 import { searchSchema, searchKnowledgeOutputSchema } from '../tools/search.js';
 import { videoSchema, getVideoOutputSchema } from '../tools/video.js';
+import { chatgptSearchSchema, chatgptSearchOutputSchema, chatgptFetchSchema, chatgptFetchOutputSchema } from '../tools/chatgpt-compat.js';
 import { recentSchema, listRecentOutputSchema } from '../tools/recent.js';
 import { statsSchema, getStatsOutputSchema } from '../tools/stats.js';
 import { noteSchema, addNoteOutputSchema } from '../tools/note.js';
@@ -135,6 +136,20 @@ const CARD_TOOLS = [
     description: 'Get full details for a specific saved item including transcript, description, summary, key takeaways. Pass YouTube video ID or internal UUID.',
     inputSchema: toInputSchema(videoSchema),
     outputSchema: toOutputSchema(getVideoOutputSchema),
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'search',
+    description: 'Search your saved BrainTube library (videos, articles, posts, notes). Returns matching item ids, titles and source URLs; pass an id to fetch for the full text.',
+    inputSchema: toInputSchema(chatgptSearchSchema),
+    outputSchema: toOutputSchema(chatgptSearchOutputSchema),
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'fetch',
+    description: 'Fetch the full text of one saved BrainTube item by the id that search returned: summary, key takeaways, description and transcript, plus its source URL.',
+    inputSchema: toInputSchema(chatgptFetchSchema),
+    outputSchema: toOutputSchema(chatgptFetchOutputSchema),
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {

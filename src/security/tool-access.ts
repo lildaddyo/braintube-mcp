@@ -42,6 +42,8 @@ export function tierGrantsAccess(userRole: UserRole, requiredTier: ToolTier): bo
 export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   // ── Authenticated (safe read-only — available to every logged-in user) ─────
   search_knowledge:       'authenticated',
+  search:                 'authenticated',
+  fetch:                  'authenticated',
   get_video:              'authenticated',
   list_recent:            'authenticated',
   get_stats:              'authenticated',

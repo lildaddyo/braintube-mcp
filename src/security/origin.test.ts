@@ -49,3 +49,12 @@ test('middleware calls next for allowed origins and 403s the rest', () => {
   assert.equal(nextCalled, 2);
   assert.equal(status, 403);
 });
+
+test('ChatGPT origins are allowed, look-alikes are not', () => {
+  for (const o of ['https://chatgpt.com', 'https://openai.com', 'https://connectors.openai.com', 'https://www.chatgpt.com']) {
+    assert.equal(isAllowedOrigin(o), true, o);
+  }
+  for (const o of ['https://evilchatgpt.com', 'https://chatgpt.com.evil.io', 'http://chatgpt.com', 'https://openai.com.attacker.net']) {
+    assert.equal(isAllowedOrigin(o), false, o);
+  }
+});
