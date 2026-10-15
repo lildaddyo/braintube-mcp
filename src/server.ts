@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { directoryMetaFor } from './tool-annotations.js';
 import { searchSchema, searchKnowledge, searchKnowledgeOutputSchema } from './tools/search.js';
 import { videoSchema, getVideo, getVideoOutputSchema } from './tools/video.js';
+import { chatgptSearchSchema, chatgptSearch, chatgptSearchOutputSchema, chatgptFetchSchema, chatgptFetch, chatgptFetchOutputSchema } from './tools/chatgpt-compat.js';
 import { recentSchema, listRecent, listRecentOutputSchema } from './tools/recent.js';
 import { statsSchema, getStats, getStatsOutputSchema } from './tools/stats.js';
 import { noteSchema, addNote, addNoteOutputSchema } from './tools/note.js';
@@ -424,6 +425,32 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => getVideo(input, auth.userId)
+  );
+
+  // ChatGPT deep research / company knowledge use only these two (src/tools/chatgpt-compat.ts).
+  server.registerTool(
+    'search',
+    {
+      description: 'Search your saved BrainTube library (videos, articles, posts, notes). Returns matching item ids, titles and source URLs; pass an id to fetch for the full text.',
+      inputSchema: chatgptSearchSchema,
+      outputSchema: chatgptSearchOutputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    async (input) => {
+      await requireFairUse(auth.userId, 'mcp_read', 'ai_search', 'search');
+      return chatgptSearch(input, auth.userId);
+    }
+  );
+
+  server.registerTool(
+    'fetch',
+    {
+      description: 'Fetch the full text of one saved BrainTube item by the id that search returned: summary, key takeaways, description and transcript, plus its source URL.',
+      inputSchema: chatgptFetchSchema,
+      outputSchema: chatgptFetchOutputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => chatgptFetch(input, auth.userId)
   );
 
   server.registerTool(

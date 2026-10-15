@@ -3,7 +3,7 @@
  * src/routes/server-card.ts (static Smithery listing).
  *
  * Asserts, for every tool:
- *   1. The tool name set is identical between both surfaces (52 == 52).
+ *   1. The tool name set is identical between both surfaces (54 == 54).
  *   2. The `annotations` object served at runtime (the inline literal with
  *      the src/tool-annotations.ts entry applied on top, as the registerTool
  *      proxy does) deep-equals the `annotations` in the server-card TOOLS array.
@@ -201,8 +201,8 @@ function main() {
     if (!runtimeNames.has(name)) failures.push(`MISSING FROM SERVER.TS: "${name}" is in server-card.ts TOOLS but not registered in server.ts`);
   }
 
-  if (runtimeNames.size !== 52) failures.push(`EXPECTED 52 tools registered in server.ts, found ${runtimeNames.size}`);
-  if (cardNames.size !== 52) failures.push(`EXPECTED 52 tools in server-card.ts TOOLS, found ${cardNames.size}`);
+  if (runtimeNames.size !== 54) failures.push(`EXPECTED 54 tools registered in server.ts, found ${runtimeNames.size}`);
+  if (cardNames.size !== 54) failures.push(`EXPECTED 54 tools in server-card.ts TOOLS, found ${cardNames.size}`);
 
   // ── 2, 3, 4 & 5. Per-tool checks ──────────────────────────────────────────
   for (const tool of TOOLS) {
