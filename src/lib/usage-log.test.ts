@@ -21,7 +21,7 @@ test('a row carries user, mcp/<tool> endpoint, tokens and cost', () => {
   assert.equal(row.user_id, 'u-1');
   assert.equal(row.tokens_used, 12);
   assert.equal(row.cost_cents, 0.0000);
-  assert.equal(row.provider, 'openai');
+  assert.equal('provider' in row, false);
   assert.equal(row.metadata.source, 'mcp');
   assert.equal((row.metadata as Record<string, unknown>).kind, 'embedding');
   assert.equal(row.metadata.prices_as_of, PRICES_AS_OF);
