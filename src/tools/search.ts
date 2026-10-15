@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { dbAdmin, semanticSearch, adaptiveSearchRpc, incrementRetrievalStats, logMcpRetrieval } from '../db/supabase.js';
 import { generateEmbedding, translateQueryToEnglish } from '../lib/openai.js';
+import { rerankCache, hashKey, normaliseQuery } from '../lib/ttl-cache.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 import type { AdaptiveResult } from '../db/supabase.js';
@@ -63,37 +64,44 @@ async function jevRerank(query: string, rows: AdaptiveResult[], windowSize = 10)
     text: [r.summary_oneliner, r.summary].filter(Boolean).join('\n').slice(0, 1200),
   }));
 
+  // Scores are memoised per (query, ordered passage ids) - repeated agent queries skip the edge-function call.
+  const cacheKey = hashKey('jev-rerank', normaliseQuery(query), top.map(r => r.id).join(','));
   try {
-    const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/functions/v1/jev-rerank`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${serviceKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, passages }),
-      signal: AbortSignal.timeout(2500),
+    const scoreById = await rerankCache.getOrCompute(cacheKey, async () => {
+      const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/functions/v1/jev-rerank`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${serviceKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, passages }),
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!res.ok) {
+        console.error(`[jev-rerank] skipped: HTTP ${res.status}`);
+        return null;
+      }
+      const data = (await res.json()) as { model?: unknown; ms?: unknown; scores?: unknown };
+      if (!Array.isArray(data?.scores)) {
+        console.error('[jev-rerank] skipped: no scores in response');
+        return null;
+      }
+      const scores = new Map<string, number>();
+      for (const s of data.scores as Array<{ id?: unknown; score?: unknown }>) {
+        if (typeof s?.id === 'string' && typeof s.score === 'number' && Number.isFinite(s.score)) scores.set(s.id, s.score);
+      }
+      if (top.some(r => !scores.has(r.id))) {
+        console.error('[jev-rerank] skipped: scores do not cover every passage id');
+        return null;
+      }
+      console.error(`[jev-rerank] scored ${top.length} (model=${String(data.model ?? '?').slice(0, 40)}, ms=${Number(data.ms) || '?'})`);
+      return scores;
     });
-    if (!res.ok) {
-      console.error(`[jev-rerank] skipped: HTTP ${res.status}`);
-      return rows;
-    }
-    const data = (await res.json()) as { model?: unknown; ms?: unknown; scores?: unknown };
-    if (!Array.isArray(data?.scores)) {
-      console.error('[jev-rerank] skipped: no scores in response');
-      return rows;
-    }
-    const scoreById = new Map<string, number>();
-    for (const s of data.scores as Array<{ id?: unknown; score?: unknown }>) {
-      if (typeof s?.id === 'string' && typeof s.score === 'number' && Number.isFinite(s.score)) scoreById.set(s.id, s.score);
-    }
-    if (top.some(r => !scoreById.has(r.id))) {
-      console.error('[jev-rerank] skipped: scores do not cover every passage id');
-      return rows;
-    }
+    if (!scoreById) return rows;
     // Keep the score on each re-ranked row (relevance_score) so callers - and the low-confidence flag below - can use it.
     const ordered = top
       .map((r, i) => ({ r, i, s: scoreById.get(r.id) as number }))
       .sort((a, b) => (b.s - a.s) || (a.i - b.i))
       .map(x => ({ ...x.r, relevance_score: Math.round(x.s * 1000) / 1000 }) as AdaptiveResult);
     const moved = ordered.filter((r, i) => r.id !== top[i].id).length;
-    console.error(`[jev-rerank] top ${top.length} re-ranked (model=${String(data.model ?? '?').slice(0, 40)}, ms=${Number(data.ms) || '?'}, moved=${moved})`);
+    console.error(`[jev-rerank] top ${top.length} re-ranked (moved=${moved})`);
     return [...ordered, ...rows.slice(windowSize)];
   } catch (err) {
     console.error(`[jev-rerank] skipped: ${err instanceof Error ? err.name : 'error'}`);
