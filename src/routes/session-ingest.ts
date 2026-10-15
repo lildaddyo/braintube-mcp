@@ -30,6 +30,7 @@ import OpenAI from 'openai';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AuthContext } from '../types.js';
 import { dbAdmin } from '../db/supabase.js';
+import { logOpenAiUsage, withUsageContext } from '../lib/usage-log.js';
 import { resolveUserRole, type UserRole } from '../security/tool-access.js';
 
 // -- Limits and constants (from the spec) --------------------------------------------------
@@ -592,7 +593,9 @@ async function openAiEmbed(inputs: string[]): Promise<number[][]> {
   // maxRetries 0: the spec allows no retries in-request. Built per call, like src/lib/openai.ts,
   // so the server still boots without OPENAI_API_KEY.
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0, timeout: 60_000 });
+  const t0 = Date.now();
   const res = await openai.embeddings.create({ model: EMBED_MODEL, input: inputs, dimensions: EMBED_DIMENSIONS });
+  logOpenAiUsage({ model: `openai/${EMBED_MODEL}`, inputTokens: res.usage?.prompt_tokens ?? 0, latencyMs: Date.now() - t0, status: 200, metadata: { kind: 'embedding', inputs: inputs.length } });
   return [...res.data].sort((a, b) => a.index - b.index).map((d) => d.embedding);
 }
 
@@ -784,7 +787,7 @@ export function createSessionIngest(overrides: Partial<SessionIngestDeps> = {}) 
     log('ok session=' + sessionId + ' rounds=' + request.rounds.length + ' round_count=' + roundCount);
 
     // Response is on its way; embed afterwards.
-    const job = embedMissing(db, embed, userId, sessionId, request.rounds).catch(() => undefined);
+    const job = withUsageContext({ userId, tool: 'session_ingest' }, () => embedMissing(db, embed, userId, sessionId, request.rounds)).catch(() => undefined);
     pending.add(job);
     void job.finally(() => pending.delete(job));
   }));
