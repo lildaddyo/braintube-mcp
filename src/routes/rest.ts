@@ -7,6 +7,7 @@
 import express from 'express';
 import type { AuthContext } from '../types.js';
 import { searchKnowledge } from '../tools/search.js';
+import { withUsageContext } from '../lib/usage-log.js';
 import { getStats } from '../tools/stats.js';
 import { listRecent } from '../tools/recent.js';
 import { getRelated } from '../tools/related.js';
@@ -77,10 +78,10 @@ restRouter.get('/search', async (req, res) => {
   }
   try {
     await requireFairUse(auth(req).userId, 'mcp_read', 'ai_search', 'search_knowledge');
-    const result = await searchKnowledge(
+    const result = await withUsageContext({ userId: auth(req).userId, tool: 'rest_search' }, () => searchKnowledge(
       { query: q, limit: parseIntQ(limit, 5) },
       auth(req).userId
-    );
+    ));
     res.json(unwrap(result));
   } catch (e) { send500(res, e); }
 });

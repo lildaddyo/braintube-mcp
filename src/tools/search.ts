@@ -51,7 +51,7 @@ function mergeByBestScore(a: AdaptiveResult[], b: AdaptiveResult[], limit: numbe
 // cc-rrk3 relies on: it returns the SAME array object when it did nothing and a fresh array when it re-ranked.
 type RerankRow = AdaptiveResult & { summary_oneliner?: string | null };
 
-async function jevRerank(query: string, rows: AdaptiveResult[], windowSize = 10): Promise<AdaptiveResult[]> {
+async function jevRerank(query: string, rows: AdaptiveResult[], windowSize = 10, userId?: string): Promise<AdaptiveResult[]> {
   if (process.env.JEV_RERANK === 'off' || rows.length < 2) return rows;
   const baseUrl = process.env.SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -71,7 +71,8 @@ async function jevRerank(query: string, rows: AdaptiveResult[], windowSize = 10)
       const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/functions/v1/jev-rerank`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${serviceKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, passages }),
+        // user_id + source let jev-rerank attribute its cost row (dark-n-cozy #158).
+        body: JSON.stringify({ query, passages, source: 'mcp', ...(userId ? { user_id: userId } : {}) }),
         signal: AbortSignal.timeout(2500),
       });
       if (!res.ok) {
@@ -311,12 +312,12 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
         const extras = [...windowRows, ...more, ...phraseOnly];
         if (extras.length > 0) {
           const pool = [...results.slice(0, 10), ...extras].slice(0, 20);
-          const ranked = await jevRerank(rerankQuery, pool, 20);
+          const ranked = await jevRerank(rerankQuery, pool, 20, userId);
           const inPool = new Set(pool.map(r => r.id));
           // ranked === pool means jevRerank did nothing: fail open to exactly what the retriever returned (extra rows dropped)
           results = (ranked === pool ? results : [...applyFilterPrior(ranked, filter), ...results.filter(r => !inPool.has(r.id))]).slice(0, limit);
         } else {
-          const ranked = await jevRerank(rerankQuery, results);
+          const ranked = await jevRerank(rerankQuery, results, 10, userId);
           results = (ranked === results ? results : [...applyFilterPrior(ranked.slice(0, 10), filter), ...ranked.slice(10)]).slice(0, limit);
         }
         // Use strategy as match_type so callers can see which retrieval path was used

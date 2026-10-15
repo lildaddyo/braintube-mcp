@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { directoryMetaFor } from './tool-annotations.js';
+import { withUsageContext } from './lib/usage-log.js';
 import { searchSchema, searchKnowledge, searchKnowledgeOutputSchema } from './tools/search.js';
 import { videoSchema, getVideo, getVideoOutputSchema } from './tools/video.js';
 import { chatgptSearchSchema, chatgptSearch, chatgptSearchOutputSchema, chatgptFetchSchema, chatgptFetch, chatgptFetchOutputSchema } from './tools/chatgpt-compat.js';
@@ -270,7 +271,8 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
       let success = true;
       let result: unknown;
       try {
-        result = await handler(input);
+        // Cost rows written during the call (OpenAI embeddings / translation) carry this user and tool.
+        result = await withUsageContext({ userId: auth.userId, tool: toolName }, () => handler(input));
       } catch (err) {
         success = false;
         throw err;

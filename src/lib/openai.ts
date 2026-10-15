@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { embeddingCache, translationCache, normaliseQuery, hashKey } from './ttl-cache.js';
+import { logOpenAiUsage } from './usage-log.js';
 
 // Texts up to this length are query-sized and get memoised; longer ones (item bodies at ingest) rarely repeat.
 const CACHEABLE_EMBED_CHARS = 2000;
@@ -28,12 +29,20 @@ async function embedUncached(text: string, dimensions?: number): Promise<number[
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const input = text.slice(0, 8000);
   const model = process.env.EMBEDDING_MODEL ?? 'text-embedding-3-small';
-  const response = await openai.embeddings.create({
-    model,
-    input,
-    ...(dimensions !== undefined ? { dimensions } : {}),
-  });
-  return response.data[0].embedding;
+  const t0 = Date.now();
+  // Logged here, inside the cache's compute step, so a cache hit writes no cost row.
+  try {
+    const response = await openai.embeddings.create({
+      model,
+      input,
+      ...(dimensions !== undefined ? { dimensions } : {}),
+    });
+    logOpenAiUsage({ model: `openai/${model}`, inputTokens: response.usage?.prompt_tokens ?? 0, latencyMs: Date.now() - t0, status: 200, metadata: { kind: 'embedding', dimensions: dimensions ?? null } });
+    return response.data[0].embedding;
+  } catch (err) {
+    logOpenAiUsage({ model: `openai/${model}`, inputTokens: 0, latencyMs: Date.now() - t0, status: (err as { status?: number })?.status ?? 0, metadata: { kind: 'embedding', failed: true } });
+    throw err;
+  }
 }
 
 /**
@@ -51,6 +60,7 @@ export async function translateQueryToEnglish(text: string): Promise<string | nu
 async function translateUncached(text: string, model: string): Promise<string | null> {
   try {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 4000, maxRetries: 0 });
+    const t0 = Date.now();
     const res = await openai.chat.completions.create({
       model,
       temperature: 0,
@@ -60,6 +70,7 @@ async function translateUncached(text: string, model: string): Promise<string | 
         { role: 'user', content: text.slice(0, 500) },
       ],
     });
+    logOpenAiUsage({ model, inputTokens: res.usage?.prompt_tokens ?? 0, outputTokens: res.usage?.completion_tokens ?? 0, latencyMs: Date.now() - t0, status: 200, metadata: { kind: 'query_translation' } });
     const out = res.choices[0]?.message?.content?.trim();
     return out && out.length > 0 ? out : null;
   } catch (err) {
