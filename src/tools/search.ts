@@ -4,6 +4,7 @@ import { generateEmbedding, translateQueryToEnglish } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 import type { AdaptiveResult } from '../db/supabase.js';
+import { parseQueryFilter, queryTopic, applyFilterPrior, type QueryFilter } from '../lib/query-filter.js';
 
 async function logRetrieval(
   userId: string,
@@ -170,6 +171,32 @@ async function hydratePhraseOnly(phraseIds: string[], adaptive: AdaptiveResult[]
   }
 }
 
+// -- Date / source window (retrieval QA 2026-10-15b) ------------------------------------------------
+// "what did I save in July about X", "the web page I saved in May about Y": the unfiltered search caps at 30 rows and
+// ranks by topic only, so items from the asked month (or of the asked source type) often never reach the re-ranker.
+// RPC search_items_window ranks ONLY the caller's items inside the filter (embedding of the query topic + full text);
+// up to 8 rows the main search did not return join the re-rank pool. Fails open to [] (kill switch QUERY_FILTER=off).
+async function windowCandidates(topic: string, topicEmbedding: number[], f: QueryFilter, userId: string, have: Set<string>): Promise<AdaptiveResult[]> {
+  try {
+    const { data, error } = await dbAdmin
+      .rpc('search_items_window', {
+        search_query: topic, query_embedding: topicEmbedding, filter_user_id: userId,
+        date_from: f.from, date_to: f.to, source_types: f.sources.length ? f.sources : null, match_count: 8,
+      })
+      .abortSignal(AbortSignal.timeout(2000));
+    if (error) {
+      console.error(`[query-filter] window skipped: ${String(error.message).slice(0, 120)}`);
+      return [];
+    }
+    const rows = ((data ?? []) as AdaptiveResult[]).filter(r => !have.has(r.id)).slice(0, 8);
+    console.error(`[query-filter] window ${f.from?.slice(0, 10) ?? '-'}..${f.to?.slice(0, 10) ?? '-'} sources=${f.sources.join('|') || '-'}: ${rows.length} new candidates`);
+    return rows;
+  } catch (err) {
+    console.error(`[query-filter] window skipped: ${err instanceof Error ? err.name : 'error'}`);
+    return [];
+  }
+}
+
 export const searchSchema = z.object({
   query: z.string().min(1).max(500).describe(
     'Natural language search query. Examples: "LLM security", "habit formation", "Andrew Huberman sleep", "AI agents"'
@@ -222,23 +249,45 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
 
       // cc-rrk2: always retrieve a 10-row window for the JEV re-ranker, then trim to the caller's limit below.
       // With JEV_RERANK=off nothing changes (fetchLimit === limit).
-      const fetchLimit = process.env.JEV_RERANK === 'off' ? limit : Math.max(limit, 10);
-      // cc-rrk3: start phrase recall alongside adaptive_search (only when the JEV re-rank is on; never for Cyrillic queries)
-      const phraseOn = process.env.JEV_RERANK !== 'off' && process.env.PHRASE_RECALL !== 'off' && !hasCyrillic(query);
-      const phrasePromise = phraseOn ? phraseRecall(embedding, userId) : null;
+      const rerankOn = process.env.JEV_RERANK !== 'off';
+      const fetchLimit = rerankOn ? Math.max(limit, 10) : limit;
+      const cyrillic = hasCyrillic(query);
+      // cc-rrk3: start phrase recall alongside adaptive_search (only when the JEV re-rank is on). Cyrillic queries run it
+      // on their English translation below (QA 2026-10-15b: the phrases are English).
+      const phraseOn = rerankOn && process.env.PHRASE_RECALL !== 'off';
+      let phrasePromise = phraseOn && !cyrillic ? phraseRecall(embedding, userId) : null;
       let results = await adaptiveSearchRpc(query, embedding, userId, fetchLimit);
       console.error(`[search] adaptive returned ${results.length} results`);
 
       // ── Cross-lingual (F3, 2026-09-25): Cyrillic queries also run in English ──
-      if (/[\u0400-\u04FF]/.test(query)) {
+      // QA 2026-10-15b: keep the union of both lists (up to 20) for the re-rank pool, re-rank against the English text.
+      let enQuery: string | null = null;
+      let enEmbedding: number[] | null = null;
+      if (cyrillic) {
         const translated = await translateQueryToEnglish(query);
         if (translated) {
           console.error(`[search] cross-lingual: "${translated.slice(0, 80)}"`);
-          const tEmbedding = await generateEmbedding(translated, 768);
-          const tResults = await adaptiveSearchRpc(translated, tEmbedding, userId, fetchLimit);
-          results = mergeByBestScore(results, tResults, fetchLimit);
+          enQuery = translated;
+          enEmbedding = await generateEmbedding(translated, 768);
+          if (phraseOn) phrasePromise = phraseRecall(enEmbedding, userId);
+          const tResults = await adaptiveSearchRpc(translated, enEmbedding, userId, fetchLimit);
+          results = mergeByBestScore(results, tResults, rerankOn ? Math.max(fetchLimit, 20) : fetchLimit);
         }
       }
+
+      // ── Date / source filter (QA 2026-10-15b) ──
+      const filter = rerankOn && process.env.QUERY_FILTER !== 'off' ? parseQueryFilter(query) : null;
+      const baseQuery = enQuery ?? query;
+      const topic = filter ? queryTopic(baseQuery) : null;
+      let windowPromise: Promise<AdaptiveResult[]> | null = null;
+      if (filter && topic) {
+        const have = new Set(results.slice(0, 20).map(r => r.id));
+        windowPromise = (async () => {
+          const topicEmbedding = topic === query ? embedding : topic === enQuery && enEmbedding ? enEmbedding : await generateEmbedding(topic, 768);
+          return windowCandidates(topic, topicEmbedding, filter, userId, have);
+        })().catch(() => [] as AdaptiveResult[]);
+      }
+      const rerankQuery = topic ?? baseQuery;
 
       if (results.length > 0) {
         // Telemetry keeps recording exactly what the retriever returned for the caller's limit (retriever order).
@@ -246,16 +295,21 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
         void incrementRetrievalStats(retrieved.map(r => r.id));
         void logRetrieval(userId, query, retrieved);
         // JEV re-rank of the top-10 window (cc-rrk1/rrk2), then trim to the caller's limit (kill switch JEV_RERANK=off).
-        // cc-rrk3: with phrase recall on, the pool is adaptive top-10 (in order) + phrase-only rows (max 20) and the WHOLE
-        // pool is scored; adaptive rows beyond the top 10 (limit > 10) stay after it.
-        const phraseOnly = phrasePromise ? await hydratePhraseOnly(await phrasePromise, results, userId) : [];
-        if (phraseOnly.length > 0) {
-          const pool = [...results.slice(0, 10), ...phraseOnly].slice(0, 20);
-          const ranked = await jevRerank(query, pool, 20);
-          // ranked === pool means jevRerank did nothing: fail open to exactly what the retriever returned (phrase-only rows dropped)
-          results = (ranked === pool ? results : [...ranked, ...results.slice(10)]).slice(0, limit);
+        // cc-rrk3 + QA 2026-10-15b: the pool is adaptive top-10 (in order) + date/source window rows + the rest of the
+        // Cyrillic/English union + phrase-only rows (max 20), and the WHOLE pool is scored; rows outside the pool stay after it.
+        const windowRows = windowPromise ? await windowPromise : [];
+        const more = cyrillic && rerankOn ? results.slice(10, 20) : [];
+        const phraseOnly = phrasePromise ? await hydratePhraseOnly(await phrasePromise, [...results, ...windowRows], userId) : [];
+        const extras = [...windowRows, ...more, ...phraseOnly];
+        if (extras.length > 0) {
+          const pool = [...results.slice(0, 10), ...extras].slice(0, 20);
+          const ranked = await jevRerank(rerankQuery, pool, 20);
+          const inPool = new Set(pool.map(r => r.id));
+          // ranked === pool means jevRerank did nothing: fail open to exactly what the retriever returned (extra rows dropped)
+          results = (ranked === pool ? results : [...applyFilterPrior(ranked, filter), ...results.filter(r => !inPool.has(r.id))]).slice(0, limit);
         } else {
-          results = (await jevRerank(query, results)).slice(0, limit);
+          const ranked = await jevRerank(rerankQuery, results);
+          results = (ranked === results ? results : [...applyFilterPrior(ranked.slice(0, 10), filter), ...ranked.slice(10)]).slice(0, limit);
         }
         // Use strategy as match_type so callers can see which retrieval path was used
         const withMatchType = results.map(r => ({
