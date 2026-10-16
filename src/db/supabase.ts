@@ -40,16 +40,31 @@ async function fetchTagsForItems(itemIds: string[]): Promise<Record<string, stri
 
 // ─── Search ─────────────────────────────────────────────────────────────────
 
+export function isStatementTimeout(message: string | undefined): boolean {
+  return /statement timeout/i.test(message ?? '');
+}
+
+/**
+ * PostgREST `or=(...)` filter: `col.ilike.%query%` for each column, with the value double-quoted.
+ * Unquoted, a comma, dot, colon or parenthesis in the user's query breaks the filter
+ * ("failed to parse logic tree", e.g. "Swift package from Instagram, glass blobs").
+ */
+export function ilikeAnyFilter(columns: string[], query: string): string {
+  const value = `%${query}%`.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return columns.map(c => `${c}.ilike."${value}"`).join(',');
+}
+
+export const ITEM_TEXT_COLUMNS = ['title', 'description', 'summary', 'full_transcript'];
+
 // Searches all source types (youtube, instagram, web, screenshot, linkedin, twitter…)
 // Hits title (100%), description (~70%), summary (~35%), full_transcript (~40%)
 export async function semanticSearch(query: string, userId: string, limit = 5) {
-  const q = `%${query}%`;
   const { data, error } = await dbAdmin
     .from('items')
     .select('id, video_id, source_type, title, channel, url, description, summary, taint_level, created_at').eq('is_adult', false)
     .eq('user_id', userId)
     .eq('is_archived', false)
-    .or(`title.ilike.${q},description.ilike.${q},summary.ilike.${q},full_transcript.ilike.${q}`)
+    .or(ilikeAnyFilter(ITEM_TEXT_COLUMNS, query))
     .order('created_at', { ascending: false })
     .limit(limit);
 
@@ -445,12 +460,19 @@ export async function adaptiveSearchRpc(
 ): Promise<AdaptiveResult[]> {
   console.error(`[adaptiveSearchRpc] query="${query.slice(0, 80)}", dims=${embedding.length}, limit=${limit}`);
 
-  const { data, error } = await dbAdmin.rpc('adaptive_search', {
+  const call = () => dbAdmin.rpc('adaptive_search', {
     search_query:    query,
     query_embedding: embedding,
     filter_user_id:  userId,
     match_count:     limit,
   });
+  let { data, error } = await call();
+  // A statement timeout under DB load (seen 2026-10-16 during the 3-large backfill) usually clears on a second try;
+  // without it the caller drops to the keyword fallback, which ranks far worse.
+  if (error && isStatementTimeout(error.message)) {
+    console.error('[adaptiveSearchRpc] statement timeout, retrying once');
+    ({ data, error } = await call());
+  }
 
   if (error) {
     console.error('[adaptiveSearchRpc] RPC error:', error.message, error);

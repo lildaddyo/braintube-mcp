@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { dbAdmin, windowSearchRpc, incrementRetrievalStats, logMcpRetrieval } from '../db/supabase.js';
+import { dbAdmin, ilikeAnyFilter, ITEM_TEXT_COLUMNS, windowSearchRpc, incrementRetrievalStats, logMcpRetrieval } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
@@ -45,7 +45,6 @@ export async function searchByDate(input: z.infer<typeof searchByDateSchema>, us
   }
 
   // ── Keyword fallback with date range ─────────────────────────────────────────
-  const q = `%${query}%`;
   const { data, error } = await dbAdmin
     .from('items')
     .select('id, video_id, source_type, title, channel, url, description, summary, taint_level, created_at').eq('is_adult', false)
@@ -53,7 +52,7 @@ export async function searchByDate(input: z.infer<typeof searchByDateSchema>, us
     .eq('is_archived', false)
     .gte('created_at', afterDate.toISOString())
     .lte('created_at', beforeDate.toISOString())
-    .or(`title.ilike.${q},description.ilike.${q},summary.ilike.${q},full_transcript.ilike.${q}`)
+    .or(ilikeAnyFilter(ITEM_TEXT_COLUMNS, query))
     .order('created_at', { ascending: false })
     .limit(limit);
 
