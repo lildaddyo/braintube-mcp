@@ -10,6 +10,7 @@ export const knowledgeGraphSchema = z.object({
 
 const graphNodeOutputSchema = z.object({
   id: z.string(),
+  node_type: z.enum(['item', 'entity']).optional(),
   title: z.string().nullable().optional(),
   source_type: z.string().optional(),
   salience_score: z.number().nullable().optional(),
@@ -41,18 +42,20 @@ interface KnowledgeEdge {
 
 interface ItemNode {
   id: string;
+  node_type?: 'item' | 'entity';
   title: string;
   source_type: string;
   salience_score: number | null;
 }
 
-async function fetchEdgesForIds(ids: string[]): Promise<KnowledgeEdge[]> {
+async function fetchEdgesForIds(ids: string[], userId: string): Promise<KnowledgeEdge[]> {
   if (ids.length === 0) return [];
 
   // Fetch edges without FK-hint joins (knowledge_edges has no FK constraints declared)
   const { data: edgeRows, error } = await dbAdmin
     .from('knowledge_edges')
     .select('source_id, target_id, edge_type, confidence')
+    .eq('user_id', userId)
     .or(ids.map(id => `source_id.eq.${id},target_id.eq.${id}`).join(','))
     .order('confidence', { ascending: false })
     .limit(50 * ids.length);
@@ -126,14 +129,14 @@ export async function getKnowledgeGraph(
     }
   };
 
-  const depth1Edges = await fetchEdgesForIds([item_id]);
+  const depth1Edges = await fetchEdgesForIds([item_id], userId);
   addEdges(depth1Edges);
 
   // Depth 2+: collect neighbour IDs, fetch their edges
   if (depth >= 2) {
     const depth1Ids = [...nodeIds].filter(id => id !== item_id);
     if (depth1Ids.length > 0) {
-      const depth2Edges = await fetchEdgesForIds(depth1Ids);
+      const depth2Edges = await fetchEdgesForIds(depth1Ids, userId);
       addEdges(depth2Edges);
     }
   }
@@ -143,7 +146,7 @@ export async function getKnowledgeGraph(
     // Fetch edges only for newly added nodes beyond depth-1 set
     const newIds = depth2Ids.filter(id => !([item_id, ...depth1Edges.map(e => e.source_id), ...depth1Edges.map(e => e.target_id)]).includes(id));
     if (newIds.length > 0) {
-      const depth3Edges = await fetchEdgesForIds(newIds);
+      const depth3Edges = await fetchEdgesForIds(newIds, userId);
       addEdges(depth3Edges);
     }
   }
@@ -161,13 +164,40 @@ export async function getKnowledgeGraph(
 
     nodes = (itemsData ?? []).map(row => ({
       id: row.id,
+      node_type: 'item' as const,
       title: row.title,
       source_type: row.source_type,
       salience_score: row.salience_score ?? null,
     }));
+
+    // Most edges (mentions, co_mentioned, related_to between concepts) point at
+    // knowledge_entities, not items. Resolve those too so clients see their names.
+    const itemIds = new Set(nodes.map(n => n.id));
+    const entityIds = neighbourIds.filter(id => !itemIds.has(id));
+    for (let i = 0; i < entityIds.length; i += 200) {
+      const { data: entityRows, error: entityErr } = await dbAdmin
+        .from('knowledge_entities')
+        .select('id, name, entity_type')
+        .in('id', entityIds.slice(i, i + 200))
+        .eq('user_id', userId);
+      if (entityErr) throw new Error(`knowledge_graph entity lookup failed: ${entityErr.message}`);
+      for (const row of entityRows ?? []) {
+        nodes.push({
+          id: row.id,
+          node_type: 'entity',
+          title: row.name,
+          source_type: row.entity_type ?? 'concept',
+          salience_score: null,
+        });
+      }
+    }
   }
 
-  const edgesOut = allEdges.map(e => ({
+  // Drop edges whose far end did not resolve (adult items, other users' rows, deleted rows).
+  const resolvedIds = new Set<string>([item_id, ...nodes.map(n => n.id)]);
+  const visibleEdges = allEdges.filter(e => resolvedIds.has(e.source_id) && resolvedIds.has(e.target_id));
+
+  const edgesOut = visibleEdges.map(e => ({
     source_id: e.source_id,
     target_id: e.target_id,
     edge_type: e.edge_type,
@@ -184,13 +214,17 @@ export async function getKnowledgeGraph(
     },
   };
 
+  const list = (ns: ItemNode[]) =>
+    `${ns.slice(0, 10).map(n => `  • ${n.title} [${n.source_type}]`).join('\n')}${ns.length > 10 ? `\n  …and ${ns.length - 10} more` : ''}`;
+  const itemNodes = nodes.filter(n => n.node_type === 'item');
+  const entityNodes = nodes.filter(n => n.node_type === 'entity');
   const summary = [
     `Knowledge graph for "${centerItem.title}"`,
     `Depth: ${depth} | Nodes: ${result.stats.total_nodes} | Edges: ${result.stats.total_edges}`,
-    nodes.length > 0
-      ? `\nConnected items:\n${nodes.slice(0, 10).map(n => `  • ${n.title} [${n.source_type}]`).join('\n')}${nodes.length > 10 ? `\n  …and ${nodes.length - 10} more` : ''}`
-      : '\nNo connected items found at this depth.',
-  ].join('\n');
+    itemNodes.length > 0 ? `\nConnected items:\n${list(itemNodes)}` : '',
+    entityNodes.length > 0 ? `\nConcepts and entities:\n${list(entityNodes)}` : '',
+    nodes.length === 0 ? '\nNo connected items found at this depth.' : '',
+  ].filter(Boolean).join('\n');
 
   return {
     content: [{ type: 'text' as const, text: summary }],
