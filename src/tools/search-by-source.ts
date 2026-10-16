@@ -17,7 +17,7 @@ export const searchBySourceOutputSchema = taintedListSchema(looseItemSchema);
 export async function searchBySource(input: z.infer<typeof searchBySourceSchema>, userId: string) {
   const { source_type, query, limit } = input;
 
-  // ── Hybrid path: semantic (content_embedding 768) + full text, inside the source type ─────────────
+  // ── Hybrid path: semantic (content_embedding_v2, 3-large 1536) + full text, inside the source type ─────────────
   if (process.env.OPENAI_API_KEY) {
     try {
       const embedding = await generateEmbedding(query);
