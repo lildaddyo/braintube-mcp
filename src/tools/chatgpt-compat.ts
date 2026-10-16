@@ -60,12 +60,20 @@ interface ItemRow {
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
-/** The item's own source URL; a YouTube watch URL when only the video id is stored. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The item's own source URL; a YouTube watch URL when only the video id is stored;
+ * otherwise the item's page in the BrainTube app (screenshots, notes and uploads have
+ * no source URL, and ChatGPT only cites results whose url is non-empty).
+ */
 export function itemUrl(row: ItemRow): string {
   const url = str(row.url);
   if (/^https?:\/\//i.test(url)) return url;
   const videoId = str(row.video_id);
   if (/^[A-Za-z0-9_-]{6,20}$/.test(videoId)) return `https://www.youtube.com/watch?v=${videoId}`;
+  const id = str(row.id);
+  if (UUID.test(id)) return `https://app.brain-tube.com/item/${id}`;
   return '';
 }
 
