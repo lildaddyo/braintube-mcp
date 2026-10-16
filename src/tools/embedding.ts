@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { dbAdmin } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
+import { buildItemEmbedText, ITEM_EMBED_COLUMNS, type ItemEmbedFields } from '../lib/item-embed-text.js';
 
 export const backfillEmbeddingsOutputSchema = z.object({
   embedded: z.number(),
@@ -8,117 +9,38 @@ export const backfillEmbeddingsOutputSchema = z.object({
   firstError: z.string().optional(),
 });
 
-// ─── Text builder ─────────────────────────────────────────────────────────────
-
-interface EmbedFields {
-  title?: string | null;
-  summary?: string | null;
-  summary_oneliner?: string | null;
-  description?: string | null;
-  full_transcript?: string | null;
-  tags?: string[] | null;
-  channel_name?: string | null; // maps to items.channel
-  // Enrichment metadata — present on items that have been through enrich-metadata
-  topic_primary?: string | null;
-  topic_secondary?: string[] | null;
-  entities?: string[] | null;
-  key_concepts?: string[] | null;
-  content_type?: string | null;
-  domain?: string | null;
-}
-
-/**
- * Build the string that gets embedded for an item.
- *
- * Version 3 (Anthropic Contextual Retrieval pattern, ~49% retrieval improvement):
- *   Contextual prefix sentence + raw content body (full_transcript preferred).
- *   Applied whenever topic_primary is set (i.e. enriched items).
- *
- * Version 1 (legacy): title + channel + tags + summary, no enrichment data.
- */
-export function buildEmbedText(fields: EmbedFields): { text: string; version: 1 | 3 } {
-  if (fields.topic_primary) {
-    // Contextual Retrieval path — embedding_version 3
-    // Prefix gives the model document-level context before the raw content.
-    const contextPrefix = [
-      `From "${fields.title || 'Untitled'}"`,
-      fields.topic_primary ? ` about ${fields.topic_primary}` : '',
-      fields.summary_oneliner ? `. ${fields.summary_oneliner}` : '',
-      '. Content: ',
-    ].join('');
-
-    const body = (
-      fields.full_transcript ||
-      fields.summary ||
-      fields.description ||
-      fields.title ||
-      ''
-    ).slice(0, 6000);
-
-    return { text: contextPrefix + body, version: 3 };
-  }
-
-  // Legacy path — embedding_version 1 (items not yet enriched)
-  const parts: string[] = [];
-  if (fields.title)        parts.push(fields.title.trim());
-  if (fields.channel_name) parts.push(`Channel: ${fields.channel_name.trim()}`);
-  if (fields.tags?.length) parts.push(`Tags: ${fields.tags.join(', ')}`);
-  if (fields.summary)      parts.push(fields.summary.trim());
-  return { text: parts.join('\n'), version: 1 };
-}
-
 // ─── Single item embed ────────────────────────────────────────────────────────
 
 /**
- * Fetch an item by internal UUID, build embed text, generate embedding,
- * and write it back to items.embedding + items.last_embedded_at.
+ * Fetch an item by internal UUID, build its embedding text with the shared recipe
+ * (src/lib/item-embed-text.ts, identical to the app's), embed it with text-embedding-3-large
+ * @1536 and write items.content_embedding_v2. The legacy 1536-d items.embedding column
+ * (3-small, read only by search_knowledge_semantic) is no longer written.
  */
 export async function embedItem(itemId: string): Promise<void> {
-  // Fetch core fields + enrichment metadata
   const { data: item, error } = await dbAdmin
     .from('items')
-    .select('id, title, summary, summary_oneliner, description, full_transcript, channel, topic_primary, topic_secondary, entities, key_concepts, content_type, domain').eq('ai_excluded', false)
+    .select(`id, ${ITEM_EMBED_COLUMNS}`).eq('ai_excluded', false)
     .eq('id', itemId)
     .single();
 
   if (error || !item) throw new Error(`embedItem: item not found — ${itemId}`);
 
-  // Resolve tag names
-  const { data: tagRows } = await dbAdmin
-    .from('item_tags')
-    .select('tags(name)')
-    .eq('item_id', itemId);
+  const { data: ext } = await dbAdmin
+    .from('screenshot_extracts')
+    .select('visual_description, key_facts')
+    .eq('item_id', itemId)
+    .maybeSingle();
 
-  const tags = (tagRows ?? [])
-    .map(r => (r.tags as unknown as { name: string } | null)?.name)
-    .filter((n): n is string => !!n);
-
-  const { text, version } = buildEmbedText({
-    title: item.title,
-    summary: item.summary,
-    summary_oneliner: item.summary_oneliner,
-    description: item.description,
-    full_transcript: item.full_transcript,
-    tags,
-    channel_name: item.channel,
-    topic_primary: item.topic_primary,
-    topic_secondary: item.topic_secondary,
-    entities: item.entities,
-    key_concepts: item.key_concepts,
-    content_type: item.content_type,
-    domain: item.domain,
-  });
-
-  if (!text.trim()) return; // nothing to embed
-
+  const text = buildItemEmbedText({ ...(item as ItemEmbedFields), ...((ext ?? {}) as ItemEmbedFields) });
   const embedding = await generateEmbedding(text);
 
   const { error: updateError } = await dbAdmin
     .from('items')
     .update({
-      embedding,
-      embedding_version: version as number,
-      last_embedded_at: new Date().toISOString()
+      content_embedding_v2: '[' + embedding.join(',') + ']',
+      embedding_quality: 'full',
+      last_embedded_at: new Date().toISOString(),
     })
     .eq('id', itemId);
 
@@ -164,7 +86,7 @@ export async function embedItemsBatch(
 // ─── Batch backfill ────────────────────────────────────────────────────────────
 
 /**
- * Backfill embeddings for all items where embedding IS NULL.
+ * Backfill embeddings for all items where content_embedding_v2 IS NULL.
  *
  * Fetches ALL null-embedding IDs upfront (avoids offset-pagination skipping items
  * whose embedding flips from NULL → filled mid-run), then processes in batches of
@@ -183,7 +105,7 @@ export async function backfillEmbeddings(
     .from('items')
     .select('id').eq('ai_excluded', false)
     .eq('user_id', userId)
-    .is('embedding', null)
+    .is('content_embedding_v2', null)
     .eq('is_archived', false)
     .order('created_at', { ascending: false });
 

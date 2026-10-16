@@ -23,12 +23,12 @@ export async function searchByDate(input: z.infer<typeof searchByDateSchema>, us
   if (isNaN(beforeDate.getTime())) throw new Error(`Invalid "before" date: ${before}`);
   if (afterDate >= beforeDate) throw new Error('"after" must be earlier than "before"');
 
-  // ── Hybrid path: semantic (content_embedding 768) + full text, inside the date window ─────────────
+  // ── Hybrid path: semantic (content_embedding_v2, 3-large 1536) + full text, inside the date window ─────────────
   // The window is applied in SQL before ranking. Before 2026-10-16 this took a global top 100 from the legacy
   // 1536-d column and filtered dates in JS, so most of an older window never reached the results.
   if (process.env.OPENAI_API_KEY) {
     try {
-      const embedding = await generateEmbedding(query, 768);
+      const embedding = await generateEmbedding(query);
       const rows = await windowSearchRpc(query, embedding, userId, { from: afterDate.toISOString(), to: beforeDate.toISOString() }, limit);
       if (rows.length > 0) {
         void incrementRetrievalStats(rows.map(r => r.id));

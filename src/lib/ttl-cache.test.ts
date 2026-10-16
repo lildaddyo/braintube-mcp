@@ -99,13 +99,12 @@ beforeEach(() => {
 });
 afterEach(() => { globalThis.fetch = realFetch; });
 
-test('generateEmbedding: a repeated query is served from the cache, per dimension', async () => {
-  const a = await generateEmbedding('agent memory', 768);
-  const b = await generateEmbedding('  agent   memory ', 768);
+test('generateEmbedding: a repeated query is served from the cache; always 3-large @1536', async () => {
+  const a = await generateEmbedding('agent memory');
+  const b = await generateEmbedding('  agent   memory ');
   assert.deepEqual(a, b);
   assert.equal(embedCalls, 1);
-  await generateEmbedding('agent memory');            // other dimensions = other key
-  assert.equal(embedCalls, 2);
+  assert.equal(a[1], 1536);                            // the fake echoes the requested dimensions
   assert.equal(cacheStats().embedding.hits, 1);
 });
 

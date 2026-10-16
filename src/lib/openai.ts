@@ -5,42 +5,50 @@ import { logOpenAiUsage } from './usage-log.js';
 // Texts up to this length are query-sized and get memoised; longer ones (item bodies at ingest) rarely repeat.
 const CACHEABLE_EMBED_CHARS = 2000;
 
+/** Embedding model for every vector the server writes or queries with (same as the app's _shared/embedding-v2.ts). */
+export const EMBED_MODEL = 'text-embedding-3-large';
+/** Stored in halfvec(1536) `*_v2` columns; the search SQL routes 1536-d queries to them. */
+export const EMBED_DIMS = 1536;
+
 /**
- * Generate a text embedding via OpenAI.
- * model defaults to text-embedding-3-small.
- * Input is sliced to 8000 chars to stay within token limits.
+ * Embed text with text-embedding-3-large @1536 (input cut to 8000 chars).
+ * There is deliberately no model or dimensions parameter: a query and the documents it is
+ * compared with must come from the same model, and the search functions pick the column by
+ * the vector's length. (Until 2026-10-16 this was 3-small, @768 for search, 1536 for items.embedding.)
  * Client is instantiated on demand so the server starts cleanly without OPENAI_API_KEY.
- *
- * @param text       Text to embed.
- * @param dimensions Optional output dimensions (text-embedding-3-* only).
- *                   Pass 768 when calling hybrid_search (halfvec(768) column).
- *                   Omit / pass undefined for the default 1536-dim output used
- *                   by search_knowledge_semantic and the items embedding column.
  */
-export async function generateEmbedding(text: string, dimensions?: number): Promise<number[]> {
-  if (text.length > CACHEABLE_EMBED_CHARS) return embedUncached(text, dimensions);
-  const model = process.env.EMBEDDING_MODEL ?? 'text-embedding-3-small';
-  const key = hashKey(model, String(dimensions ?? ''), normaliseQuery(text));
-  const vec = await embeddingCache.getOrCompute(key, async () => Float32Array.from(await embedUncached(text, dimensions)));
+export async function generateEmbedding(text: string): Promise<number[]> {
+  if (text.length > CACHEABLE_EMBED_CHARS) return embedUncached(text);
+  const key = hashKey(EMBED_MODEL, String(EMBED_DIMS), normaliseQuery(text));
+  const vec = await embeddingCache.getOrCompute(key, async () => Float32Array.from(await embedUncached(text)));
   return Array.from(vec);
 }
 
-async function embedUncached(text: string, dimensions?: number): Promise<number[]> {
+/** Embed many texts in one request (order kept). */
+export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
+  if (texts.length === 0) return [];
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const input = text.slice(0, 8000);
-  const model = process.env.EMBEDDING_MODEL ?? 'text-embedding-3-small';
+  const t0 = Date.now();
+  try {
+    const res = await openai.embeddings.create({ model: EMBED_MODEL, input: texts.map((t) => t.slice(0, 8000)), dimensions: EMBED_DIMS });
+    logOpenAiUsage({ model: `openai/${EMBED_MODEL}`, inputTokens: res.usage?.prompt_tokens ?? 0, latencyMs: Date.now() - t0, status: 200, metadata: { kind: 'embedding', dimensions: EMBED_DIMS, inputs: texts.length } });
+    return [...res.data].sort((a, b) => a.index - b.index).map((d) => d.embedding);
+  } catch (err) {
+    logOpenAiUsage({ model: `openai/${EMBED_MODEL}`, inputTokens: 0, latencyMs: Date.now() - t0, status: (err as { status?: number })?.status ?? 0, metadata: { kind: 'embedding', failed: true } });
+    throw err;
+  }
+}
+
+async function embedUncached(text: string): Promise<number[]> {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const t0 = Date.now();
   // Logged here, inside the cache's compute step, so a cache hit writes no cost row.
   try {
-    const response = await openai.embeddings.create({
-      model,
-      input,
-      ...(dimensions !== undefined ? { dimensions } : {}),
-    });
-    logOpenAiUsage({ model: `openai/${model}`, inputTokens: response.usage?.prompt_tokens ?? 0, latencyMs: Date.now() - t0, status: 200, metadata: { kind: 'embedding', dimensions: dimensions ?? null } });
+    const response = await openai.embeddings.create({ model: EMBED_MODEL, input: text.slice(0, 8000), dimensions: EMBED_DIMS });
+    logOpenAiUsage({ model: `openai/${EMBED_MODEL}`, inputTokens: response.usage?.prompt_tokens ?? 0, latencyMs: Date.now() - t0, status: 200, metadata: { kind: 'embedding', dimensions: EMBED_DIMS } });
     return response.data[0].embedding;
   } catch (err) {
-    logOpenAiUsage({ model: `openai/${model}`, inputTokens: 0, latencyMs: Date.now() - t0, status: (err as { status?: number })?.status ?? 0, metadata: { kind: 'embedding', failed: true } });
+    logOpenAiUsage({ model: `openai/${EMBED_MODEL}`, inputTokens: 0, latencyMs: Date.now() - t0, status: (err as { status?: number })?.status ?? 0, metadata: { kind: 'embedding', failed: true } });
     throw err;
   }
 }

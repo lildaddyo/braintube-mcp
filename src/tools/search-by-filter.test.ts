@@ -1,5 +1,5 @@
 // search_by_source / search_by_date_range (embedding audit 2026-10-16, defect 5): both now rank inside the filter
-// with RPC search_items_window on the 768-d content embedding, instead of a global top-N from the legacy 1536-d
+// with RPC search_items_window on the content embedding (3-large 1536-d since 2026-10-16), instead of a global top-N from the legacy 1536-d
 // column filtered in JS. Only the network is faked (Supabase PostgREST + OpenAI embeddings).
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -54,17 +54,17 @@ afterEach(() => { globalThis.fetch = realFetch; });
 const callsTo = (path: string) => calls.filter(c => c.path === path);
 const data = (res: any) => (res.structuredContent as any).data as any[];
 
-test('search_by_source ranks inside the source type with a 768-d query on search_items_window', async () => {
+test('search_by_source ranks inside the source type with a 1536-d (3-large) query on search_items_window', async () => {
   windowRows = [{ id: 'a', title: 'A', source_type: 'youtube', rrf_score: 0.03 }, { id: 'b', title: 'B', source_type: 'youtube', rrf_score: 0.02 }];
   const res = await searchBySource({ source_type: 'youtube', query: 'rag', limit: 5 }, USER);
   const emb = callsTo('/v1/embeddings')[0];
-  assert.equal(emb.body.dimensions, 768);
+  assert.equal(emb.body.dimensions, 1536);
   const w = callsTo('/rest/v1/rpc/search_items_window');
   assert.equal(w.length, 1);
   assert.deepEqual(w[0].body.source_types, ['youtube']);
   assert.equal(w[0].body.filter_user_id, USER);
   assert.equal(w[0].body.match_count, 5);
-  assert.equal(w[0].body.query_embedding.length, 768);
+  assert.equal(w[0].body.query_embedding.length, 1536);
   assert.deepEqual(data(res).map(r => r.id), ['a', 'b']);
   assert.equal(data(res)[0].video_id, 'v-a');                // hydrated
   assert.equal((res.structuredContent as any).taint_level, 2); // taint comes from the items lookup
