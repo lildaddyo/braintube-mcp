@@ -4,7 +4,7 @@
  */
 
 import { z } from 'zod';
-import { dbAdmin } from '../db/supabase.js';
+import { dbAdmin, ilikeAnyFilter } from '../db/supabase.js';
 import { edgeAuthHeaders } from '../lib/edge-auth.js';
 
 const COMPILE_KNOWLEDGE_URL =
@@ -106,8 +106,7 @@ export async function getConceptArticles(
   if (input.cluster_id) q = q.eq('cluster_id', input.cluster_id);
   if (input.brain_id)   q = q.eq('brain_id', input.brain_id);
   if (input.query) {
-    const term = `%${input.query}%`;
-    q = q.or(`title.ilike.${term},content.ilike.${term}`);
+    q = q.or(ilikeAnyFilter(['title', 'content'], input.query));
   }
 
   const { data, error } = await q;

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { dbAdmin, windowSearchRpc, incrementRetrievalStats, logMcpRetrieval } from '../db/supabase.js';
+import { dbAdmin, ilikeAnyFilter, ITEM_TEXT_COLUMNS, windowSearchRpc, incrementRetrievalStats, logMcpRetrieval } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
@@ -37,14 +37,13 @@ export async function searchBySource(input: z.infer<typeof searchBySourceSchema>
   }
 
   // ── Keyword fallback ─────────────────────────────────────────────────────────
-  const q = `%${query}%`;
   const { data, error } = await dbAdmin
     .from('items')
     .select('id, video_id, source_type, title, channel, url, description, summary, taint_level, created_at').eq('is_adult', false)
     .eq('user_id', userId)
     .eq('source_type', source_type)
     .eq('is_archived', false)
-    .or(`title.ilike.${q},description.ilike.${q},summary.ilike.${q},full_transcript.ilike.${q}`)
+    .or(ilikeAnyFilter(ITEM_TEXT_COLUMNS, query))
     .order('created_at', { ascending: false })
     .limit(limit);
 
