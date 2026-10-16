@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { dbAdmin, semanticSearchRpc, incrementRetrievalStats, logMcpRetrieval } from '../db/supabase.js';
+import { dbAdmin, windowSearchRpc, incrementRetrievalStats, logMcpRetrieval } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
@@ -17,34 +17,22 @@ export const searchBySourceOutputSchema = taintedListSchema(looseItemSchema);
 export async function searchBySource(input: z.infer<typeof searchBySourceSchema>, userId: string) {
   const { source_type, query, limit } = input;
 
-  // ── Semantic path ────────────────────────────────────────────────────────────
-  if (query.trim().length > 10 && process.env.OPENAI_API_KEY) {
+  // ── Hybrid path: semantic (content_embedding 768) + full text, inside the source type ─────────────
+  if (process.env.OPENAI_API_KEY) {
     try {
-      const embedding = await generateEmbedding(query);
-      const { data: semanticData, error } = await dbAdmin.rpc('search_knowledge_semantic', {
-        query_embedding: embedding,
-        match_user_id: userId,
-        match_count: limit * 3, // over-fetch to account for source_type filter
-        similarity_threshold: 0.3
-      });
-
-      if (!error && semanticData?.length) {
-        const filtered = (semanticData as Array<{ id: string; source_type: string; taint_level?: number; [key: string]: unknown }>)
-          .filter(r => r.source_type === source_type)
-          .slice(0, limit);
-
-        if (filtered.length > 0) {
-          void incrementRetrievalStats(filtered.map(r => r.id));
-          void logMcpRetrieval(userId, query, 'mcp_search_by_source', filtered.length, filtered.map(r => r.id));
-          const tainted = wrapWithTaint(filtered.map(r => ({ ...r, match_type: 'semantic' })));
-          return {
-            content: [{ type: 'text' as const, text: formatTaintedResponse(tainted) }],
-            structuredContent: tainted as unknown as Record<string, unknown>
-          };
-        }
+      const embedding = await generateEmbedding(query, 768);
+      const rows = await windowSearchRpc(query, embedding, userId, { sources: [source_type] }, limit);
+      if (rows.length > 0) {
+        void incrementRetrievalStats(rows.map(r => r.id));
+        void logMcpRetrieval(userId, query, 'mcp_search_by_source', rows.length, rows.map(r => r.id));
+        const tainted = wrapWithTaint(rows.map(r => ({ ...r, match_type: 'hybrid' })));
+        return {
+          content: [{ type: 'text' as const, text: formatTaintedResponse(tainted) }],
+          structuredContent: tainted as unknown as Record<string, unknown>
+        };
       }
     } catch (err) {
-      console.error('[search_by_source] semantic path failed, falling back to keyword:', err);
+      console.error('[search_by_source] hybrid path failed, falling back to keyword:', err);
     }
   }
 

@@ -306,54 +306,61 @@ export async function countIngestsToday(userId: string): Promise<number> {
   return count ?? 0;
 }
 
-// ─── Semantic search via pgvector RPC (legacy — kept for search-by-source, search-by-date) ──
+// ─── Filtered hybrid search (search_by_source, search_by_date_range) ─────────────────────────────────────────
 
-export interface SemanticResult {
+export interface WindowResult {
   id: string;
   title: string;
-  summary: string | null;
+  url: string | null;
   source_type: string;
-  source_url: string | null;
-  channel_name: string | null;
+  channel: string | null;
+  summary: string | null;
+  summary_oneliner: string | null;
+  topic_primary: string | null;
+  key_concepts: string[] | null;
+  entities: string[] | null;
   tags: string[] | null;
-  saved_at: string;
-  similarity: number;
-  match_type: 'semantic';
-  taint_level?: number;  // not returned by RPC — fetched in search.ts when needed
+  created_at: string;
+  full_text_rank: number | null;
+  semantic_rank: number | null;
+  rrf_score: number;
+  video_id?: string | null;
+  taint_level?: number;
 }
 
 /**
- * Call the search_knowledge_semantic RPC (pure vector similarity).
- * Used by search-by-source and search-by-date tools.
- * For the main search_knowledge tool, use hybridSearchRpc instead.
+ * Hybrid (content_embedding 768 + full text, RRF) search over ONLY the caller's items inside a date window and/or
+ * source types, via RPC search_items_window. Replaces search_knowledge_semantic for search_by_source and
+ * search_by_date_range (embedding audit 2026-10-16, defect 5): that RPC read the legacy items.embedding vector(1536)
+ * through an ivfflat index with lists=100 and the default probes=1, so ~1% of the index was scanned and the source /
+ * date filter was applied in JS after a global top-N. Adds taint_level and video_id, which the RPC does not return.
  */
-export async function semanticSearchRpc(
+export async function windowSearchRpc(
+  query: string,
   embedding: number[],
   userId: string,
-  limit = 10,
-  threshold = 0.1
-): Promise<SemanticResult[]> {
-  console.error(`[semanticSearchRpc] embedding dims=${embedding.length}, limit=${limit}, threshold=${threshold}`);
-
-  const { data, error } = await dbAdmin.rpc('search_knowledge_semantic', {
+  opts: { from?: string | null; to?: string | null; sources?: string[] | null },
+  limit = 10
+): Promise<WindowResult[]> {
+  const { data, error } = await dbAdmin.rpc('search_items_window', {
+    search_query: query,
     query_embedding: embedding,
-    match_user_id: userId,
+    filter_user_id: userId,
+    date_from: opts.from ?? null,
+    date_to: opts.to ?? null,
+    source_types: opts.sources && opts.sources.length ? opts.sources : null,
     match_count: limit,
-    similarity_threshold: threshold
   });
-
-  if (error) {
-    console.error('[semanticSearchRpc] RPC error:', error.message, error);
-    throw new Error(`Semantic search RPC failed: ${error.message}`);
-  }
-
-  const rows = (data ?? []) as SemanticResult[];
-  console.error(`[semanticSearchRpc] RPC returned ${rows.length} rows`);
-  if (rows.length > 0) {
-    console.error(`[semanticSearchRpc] top similarity=${rows[0].similarity?.toFixed(4)}, bottom=${rows[rows.length - 1].similarity?.toFixed(4)}`);
-  }
-
-  return rows.map((row: SemanticResult) => ({ ...row, match_type: 'semantic' as const }));
+  if (error) throw new Error(`search_items_window failed: ${error.message}`);
+  const rows = (data ?? []) as WindowResult[];
+  if (!rows.length) return rows;
+  const { data: meta } = await dbAdmin
+    .from('items')
+    .select('id, video_id, taint_level')
+    .eq('user_id', userId)
+    .in('id', rows.map(r => r.id));
+  const byId = new Map((meta ?? []).map((m: { id: string; video_id: string | null; taint_level: number | null }) => [m.id, m]));
+  return rows.map(r => ({ ...r, video_id: byId.get(r.id)?.video_id ?? null, taint_level: byId.get(r.id)?.taint_level ?? 0 }));
 }
 
 // ─── Hybrid search RPC (vector + full-text, RRF-ranked) ───────────────────────

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { dbAdmin, incrementRetrievalStats, logMcpRetrieval } from '../db/supabase.js';
+import { dbAdmin, windowSearchRpc, incrementRetrievalStats, logMcpRetrieval } from '../db/supabase.js';
 import { generateEmbedding } from '../lib/openai.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
@@ -23,38 +23,24 @@ export async function searchByDate(input: z.infer<typeof searchByDateSchema>, us
   if (isNaN(beforeDate.getTime())) throw new Error(`Invalid "before" date: ${before}`);
   if (afterDate >= beforeDate) throw new Error('"after" must be earlier than "before"');
 
-  // ── Semantic path ────────────────────────────────────────────────────────────
-  if (query.trim().length > 10 && process.env.OPENAI_API_KEY) {
+  // ── Hybrid path: semantic (content_embedding 768) + full text, inside the date window ─────────────
+  // The window is applied in SQL before ranking. Before 2026-10-16 this took a global top 100 from the legacy
+  // 1536-d column and filtered dates in JS, so most of an older window never reached the results.
+  if (process.env.OPENAI_API_KEY) {
     try {
-      const embedding = await generateEmbedding(query);
-      // Over-fetch from semantic RPC then filter by date in JS
-      const { data: semanticData, error } = await dbAdmin.rpc('search_knowledge_semantic', {
-        query_embedding: embedding,
-        match_user_id: userId,
-        match_count: 100,
-        similarity_threshold: 0.3
-      });
-
-      if (!error && semanticData?.length) {
-        const filtered = (semanticData as Array<{ id: string; saved_at?: string; created_at?: string; taint_level?: number; [key: string]: unknown }>)
-          .filter(r => {
-            const ts = new Date((r.saved_at ?? r.created_at) as string);
-            return ts >= afterDate && ts <= beforeDate;
-          })
-          .slice(0, limit);
-
-        if (filtered.length > 0) {
-          void incrementRetrievalStats(filtered.map(r => r.id));
-          void logMcpRetrieval(userId, query, 'mcp_search_by_date_range', filtered.length, filtered.map(r => r.id));
-          const tainted = wrapWithTaint(filtered.map(r => ({ ...r, match_type: 'semantic' })));
-          return {
-            content: [{ type: 'text' as const, text: formatTaintedResponse(tainted) }],
-            structuredContent: tainted as unknown as Record<string, unknown>
-          };
-        }
+      const embedding = await generateEmbedding(query, 768);
+      const rows = await windowSearchRpc(query, embedding, userId, { from: afterDate.toISOString(), to: beforeDate.toISOString() }, limit);
+      if (rows.length > 0) {
+        void incrementRetrievalStats(rows.map(r => r.id));
+        void logMcpRetrieval(userId, query, 'mcp_search_by_date_range', rows.length, rows.map(r => r.id));
+        const tainted = wrapWithTaint(rows.map(r => ({ ...r, match_type: 'hybrid' })));
+        return {
+          content: [{ type: 'text' as const, text: formatTaintedResponse(tainted) }],
+          structuredContent: tainted as unknown as Record<string, unknown>
+        };
       }
     } catch (err) {
-      console.error('[search_by_date_range] semantic path failed, falling back to keyword:', err);
+      console.error('[search_by_date_range] hybrid path failed, falling back to keyword:', err);
     }
   }
 
