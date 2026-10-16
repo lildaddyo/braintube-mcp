@@ -329,7 +329,7 @@ export interface WindowResult {
 }
 
 /**
- * Hybrid (content_embedding 768 + full text, RRF) search over ONLY the caller's items inside a date window and/or
+ * Hybrid (content embedding, 3-large 1536-d, + full text, RRF) search over ONLY the caller's items inside a date window and/or
  * source types, via RPC search_items_window. Replaces search_knowledge_semantic for search_by_source and
  * search_by_date_range (embedding audit 2026-10-16, defect 5): that RPC read the legacy items.embedding vector(1536)
  * through an ivfflat index with lists=100 and the default probes=1, so ~1% of the index was scanned and the source /
