@@ -38,6 +38,7 @@ test('fetch truncates very long text and never invents a non-http url', () => {
   assert.ok(doc.text.length < 100_100 && doc.text.endsWith('[truncated]'));
   assert.equal(doc.url, '');
   assert.equal(itemUrl({ video_id: 'bad id!' }), '');
+  assert.equal(itemUrl({ id: '62c15413-81a1-4431-863f-308f0facb038', url: '' }), 'https://app.brain-tube.com/item/62c15413-81a1-4431-863f-308f0facb038');
 });
 
 test('output schemas are plain objects the SDK can validate against', () => {
