@@ -180,9 +180,14 @@ export const MAX_LOGIN_FAILURES_PER_STATE = 5;
 
 const pendingAuths = new Map<string, PendingAuth>();
 
+// How long a started sign-in stays usable. Was 10 min: a ChatGPT connect on 2026-10-19 expired
+// before the person reached "Continue with Google". The entry holds only state + PKCE challenge,
+// is single-use, and the auth code it leads to still lives 60 s.
+export const PENDING_AUTH_TTL_MS = 30 * 60 * 1000;
+
 export function storePendingAuth(data: Omit<PendingAuth, 'createdAt'>): void {
   // Sweep expired entries on each write to avoid unbounded growth
-  const cutoff = Date.now() - 10 * 60 * 1000;
+  const cutoff = Date.now() - PENDING_AUTH_TTL_MS;
   for (const [key, val] of pendingAuths) {
     if (val.createdAt < cutoff) pendingAuths.delete(key);
   }
@@ -193,7 +198,7 @@ export function consumePendingAuth(state: string): PendingAuth | undefined {
   const val = pendingAuths.get(state);
   if (!val) return undefined;
   pendingAuths.delete(state);
-  if (Date.now() - val.createdAt > 10 * 60 * 1000) return undefined;
+  if (Date.now() - val.createdAt > PENDING_AUTH_TTL_MS) return undefined;
   return val;
 }
 
@@ -204,7 +209,7 @@ export function consumePendingAuth(state: string): PendingAuth | undefined {
 export function peekPendingAuth(state: string): PendingAuth | undefined {
   const val = pendingAuths.get(state);
   if (!val) return undefined;
-  if (Date.now() - val.createdAt > 10 * 60 * 1000) return undefined;
+  if (Date.now() - val.createdAt > PENDING_AUTH_TTL_MS) return undefined;
   return val;
 }
 
