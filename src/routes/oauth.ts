@@ -127,7 +127,7 @@ interface GoogleAuthState {
 }
 
 const googleAuthStates = new Map<string, GoogleAuthState>();
-const GOOGLE_STATE_TTL_MS = 10 * 60 * 1000;
+const GOOGLE_STATE_TTL_MS = 10 * 60 * 1000; // Google round trip only; the pending sign-in itself lasts PENDING_AUTH_TTL_MS
 
 setInterval(() => {
   const now = Date.now();

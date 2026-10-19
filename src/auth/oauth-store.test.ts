@@ -369,3 +369,20 @@ test('codeBindingMatches checks client_id and redirect_uri only when the token r
   assert.equal(codeBindingMatches(entry, { redirect_uri: 'https://evil.example/cb' }), false);
   assert.equal(codeBindingMatches({}, { client_id: 'anything' }), true);
 });
+
+test('a started sign-in stays usable for 25 minutes and expires after 30', async () => {
+  const { storePendingAuth, peekPendingAuth, PENDING_AUTH_TTL_MS } = await import('./oauth-store.js');
+  assert.equal(PENDING_AUTH_TTL_MS, 30 * 60 * 1000);
+  const realNow = Date.now;
+  try {
+    const t0 = realNow();
+    Date.now = () => t0;
+    storePendingAuth({ clientId: 'c', redirectUri: 'https://chatgpt.com/connector/oauth/x', state: 'ttl-state', codeChallenge: 'cc', codeChallengeMethod: 'S256' });
+    Date.now = () => t0 + 25 * 60 * 1000;
+    assert.ok(peekPendingAuth('ttl-state'));
+    Date.now = () => t0 + 31 * 60 * 1000;
+    assert.equal(peekPendingAuth('ttl-state'), undefined);
+  } finally {
+    Date.now = realNow;
+  }
+});
