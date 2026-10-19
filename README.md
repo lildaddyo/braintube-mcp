@@ -3,7 +3,7 @@
 **Save once. Query anywhere.** BrainTube compiles what you watch, read and listen to — YouTube videos, podcasts, articles, PDFs — into a persistent, searchable knowledge base, and this MCP server lets your AI search it and save to it over one endpoint.
 
 - **Endpoint:** `https://mcp.brain-tube.com/mcp` (Streamable HTTP)
-- **Version:** 3.12.4
+- **Version:** 3.14.11
 - **Auth:** OAuth 2.0 (authorization code + PKCE) or a BrainTube API key via `X-BrainTube-Token` header
 - **Discovery:** [`/.well-known/oauth-protected-resource`](https://mcp.brain-tube.com/.well-known/oauth-protected-resource) · [`/.well-known/oauth-authorization-server`](https://mcp.brain-tube.com/.well-known/oauth-authorization-server)
 
@@ -34,7 +34,7 @@ Your AI can search and cite your own corpus instead of starting every conversati
 }
 ```
 
-Tested with Claude; any client that speaks MCP streamable HTTP uses the same endpoint. In clients with OAuth support, just add the endpoint URL and sign in when prompted.
+Tested with Claude and ChatGPT; any client that speaks MCP streamable HTTP uses the same endpoint. In clients with OAuth support, just add the endpoint URL and sign in when prompted.
 
 **Claude Code** — one command:
 
@@ -43,6 +43,8 @@ claude mcp add --transport http --scope user braintube https://mcp.brain-tube.co
 ```
 
 **Claude.ai** — Customize → Connectors → + Add → Add custom connector, paste the endpoint, sign in. No API key needed.
+
+**ChatGPT** — Settings → Plugins → Add → Add custom MCP server. Paste `https://mcp.brain-tube.com/mcp`, choose OAuth, tick the risk box, Create, then Connect and sign in to BrainTube. No API key needed. ChatGPT uses the `search` and `fetch` tools and cites each answer back to your saved item.
 
 Step-by-step setup for each client, plus how BrainTube compares with other MCP memory servers: [How to give Claude long-term memory with MCP](https://brain-tube.com/guide/give-your-ai-memory-mcp).
 
