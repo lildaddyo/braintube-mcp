@@ -26,6 +26,11 @@ const EXACT_ORIGINS = new Set([
   // that starts OAuth discovery, so the connector could never sign in.
   'https://chatgpt.com',
   'https://openai.com',
+  // Gemini (app and Enterprise). Most Gemini calls are server-side with no
+  // Origin; these cover the ones that carry one. Exact hosts only: Google
+  // serves user content on other subdomains.
+  'https://gemini.google.com',
+  'https://vertexaisearch.cloud.google.com',
 ]);
 
 /** Host suffixes allowed over https (subdomains only, never look-alikes). */
