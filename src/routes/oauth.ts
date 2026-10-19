@@ -33,8 +33,7 @@ import {
   verifyPkce,
   normalizeRedirectUri,
   refreshFailure,
-  codeBindingMatches,
-} from '../auth/oauth-store.js';
+  codeBindingMatches, isGoogleRelayRedirect } from '../auth/oauth-store.js';
 import { BRAND_LOGO_DATA_URI } from './brand-logo.js';
 
 export const oauthRouter = Router();
@@ -184,7 +183,7 @@ oauthRouter.get('/.well-known/oauth-authorization-server', (req: Request, res: R
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
-    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic', 'none'],
     scopes_supported: ['openid', 'profile', 'email'],
   });
 });
@@ -225,6 +224,13 @@ oauthRouter.post('/oauth/register', (req: Request, res: Response) => {
   // answering client_secret_post (as we did for everyone) hands it a method it cannot use.
   // Anything else keeps client_secret_post, which Claude and the other clients rely on.
   const publicClient = body.token_endpoint_auth_method === 'none';
+  // Gemini's DCR has been seen asking for client_secret_basic as well as _post.
+  // The token endpoint authenticates with PKCE either way; echo what was asked.
+  const authMethod = publicClient
+    ? 'none'
+    : body.token_endpoint_auth_method === 'client_secret_basic'
+      ? 'client_secret_basic'
+      : 'client_secret_post';
 
   const client = registerClient(
     redirectUris,
@@ -237,7 +243,7 @@ oauthRouter.post('/oauth/register', (req: Request, res: Response) => {
     client_id_issued_at: Math.floor(client.registeredAt / 1000),
     redirect_uris: client.redirectUris,
     client_name: client.clientName,
-    token_endpoint_auth_method: publicClient ? 'none' : 'client_secret_post',
+    token_endpoint_auth_method: authMethod,
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],
   });
@@ -374,6 +380,10 @@ oauthRouter.post('/oauth/authorize', loginIpLimit, loginEmailLimit, async (req: 
   const redirectUrl = new URL(redirectTarget);
   redirectUrl.searchParams.set('code', code);
   redirectUrl.searchParams.set('state', pending.state);
+  if (isGoogleRelayRedirect(redirectTarget)) {
+    res.set('Cache-Control', 'no-store').status(200).send(relayRedirectPage(redirectUrl.toString()));
+    return;
+  }
   res.redirect(redirectUrl.toString());
 });
 
@@ -539,7 +549,11 @@ oauthRouter.get('/oauth/google/callback', async (req: Request, res: Response) =>
 // ─── Token endpoint ───────────────────────────────────────────────────────────
 
 oauthRouter.post('/oauth/token', refreshIpLimit, async (req: Request, res: Response) => {
-  const body = req.body as Record<string, string>;
+  const body = { ...(req.body as Record<string, string>) };
+  // client_secret_basic: the client id arrives in the Authorization header.
+  // Used only to bind the code to its client; PKCE stays the authentication.
+  const basicClientId = clientIdFromBasic(req.headers.authorization);
+  if (!body.client_id && basicClientId) body.client_id = basicClientId;
   const { grant_type } = body;
 
   // ── authorization_code grant ─────────────────────────────────────────────
@@ -654,7 +668,24 @@ function allowFormRedirectTo(res: Response, redirectUri: string): void {
   if (typeof current === 'string') res.setHeader('Content-Security-Policy', formActionCsp(current, redirectUri));
 }
 
+export function clientIdFromBasic(header: string | undefined): string | undefined {
+  if (typeof header !== 'string' || !header.startsWith('Basic ')) return undefined;
+  try {
+    const decoded = Buffer.from(header.slice(6).trim(), 'base64').toString('utf8');
+    const idx = decoded.indexOf(':');
+    const id = decodeURIComponent(idx === -1 ? decoded : decoded.slice(0, idx));
+    return id || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // ─── HTML helpers ─────────────────────────────────────────────────────────────
+
+export function relayRedirectPage(url: string): string {
+  const u = esc(url);
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="refresh" content="0;url=${u}"><title>Signing you in…</title></head><body><p>Signing you in… <a href="${u}">Continue</a></p></body></html>`;
+}
 
 function esc(s: string): string {
   return s

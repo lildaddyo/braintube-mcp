@@ -16,6 +16,11 @@ const EXACT_REDIRECT_URIS = new Set([
   // ChatGPT's stable callback, used when the server advertises issuer
   // identification (and by legacy connectors). developers.openai.com/plugins/build/auth
   'https://chatgpt.com/connector_platform_oauth_redirect',
+  // Gemini Enterprise custom MCP data stores (admin-entered client, no DCR).
+  // docs.cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server
+  'https://vertexaisearch.cloud.google.com/oauth-redirect',
+  // Antigravity CLI when a client is pre-registered instead of DCR.
+  'https://antigravity.google/oauth-callback',
 ]);
 
 // TODO: confirm exact callback paths for these and move them into
@@ -32,6 +37,11 @@ const REDIRECT_URI_GLOB_ALLOWLIST = [
   // ChatGPT without issuer identification: one callback per connection,
   // https://chatgpt.com/connector/oauth/{callback_id}. Single segment only.
   'https://chatgpt.com/connector/oauth/*',
+  // Gemini app custom MCP ("Connected Apps"): DCR registers six relay callbacks
+  // at once and fails if any is refused. One segment, user_bound_custom-mcp-…
+  ...['oauth-redirect', 'oauth-redirect-sandbox', 'oauth-redirect-test'].flatMap((h) =>
+    ['r', 'a'].map((k) => `https://${h}.googleusercontent.com/${k}/user_bound_custom-mcp-*`),
+  ),
 ];
 
 // URL.hostname keeps the brackets on IPv6 literals.
@@ -71,6 +81,21 @@ export function normalizeRedirectUri(uri: string): string | null {
     return normalized;
   }
   return null;
+}
+
+// Google's OAuth relay for the Gemini app answers our callback with a second
+// redirect to another Google origin. After a form POST, Chromium applies the
+// login page's CSP form-action to that hop too and blocks it, so for these
+// callbacks the sign-in finishes with a meta refresh instead of a 302.
+const GOOGLE_RELAY_HOST = /^oauth-redirect(-sandbox|-test)?\.googleusercontent\.com$/;
+
+export function isGoogleRelayRedirect(uri: string): boolean {
+  try {
+    const u = new URL(uri);
+    return u.protocol === 'https:' && GOOGLE_RELAY_HOST.test(u.hostname);
+  } catch {
+    return false;
+  }
 }
 
 export function isRedirectUriAllowed(uri: string): boolean {
