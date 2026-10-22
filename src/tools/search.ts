@@ -6,6 +6,7 @@ import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 import type { AdaptiveResult } from '../db/supabase.js';
 import { parseQueryFilter, queryTopic, applyFilterPrior, type QueryFilter } from '../lib/query-filter.js';
+import { pickMoments, TIMED_SOURCES, type Moment, type SegmentRow } from '../lib/moments.js';
 
 async function logRetrieval(
   userId: string,
@@ -206,6 +207,46 @@ async function windowCandidates(topic: string, topicEmbedding: number[], f: Quer
   }
 }
 
+// -- Moments (PH demo, 2026-10-22) --------------------------------------------------------------------
+// For the top timed results (YouTube today) the 1-3 transcript segments that best match the query, as { t, url, quote }
+// with a link that opens the video at that second. Ranked by search_segments (service_role only), the hybrid segment
+// ranking the in-app chat uses, scoped to one item per call so one long video cannot crowd out the others. Added as
+// an extra `moments` field on the row; the row itself is unchanged. Fails open per item (no field). Kill switch:
+// SEARCH_MOMENTS=off.
+const MOMENT_ITEMS = 5;
+
+async function itemMoments(query: string, embedding: number[], userId: string, row: AdaptiveResult): Promise<Moment[]> {
+  try {
+    const { data, error } = await dbAdmin
+      .rpc('search_segments', {
+        p_user_id: userId, p_query: query, p_query_embedding: JSON.stringify(embedding), p_limit: 6, p_item_ids: [row.id],
+      })
+      .abortSignal(AbortSignal.timeout(2500));
+    if (error) {
+      console.error(`[moments] skipped ${row.id}: ${String(error.message).slice(0, 120)}`);
+      return [];
+    }
+    const r = row as AdaptiveResult & { url?: string | null; video_id?: string | null };
+    return pickMoments(((data ?? []) as SegmentRow[]).filter(s => s.item_id === row.id), r.url, r.video_id);
+  } catch (err) {
+    console.error(`[moments] skipped ${row.id}: ${err instanceof Error ? err.name : 'error'}`);
+    return [];
+  }
+}
+
+export async function attachMoments<T extends AdaptiveResult>(query: string, embedding: number[], userId: string, rows: T[]): Promise<Array<T & { moments?: Moment[] }>> {
+  if (process.env.SEARCH_MOMENTS === 'off') return rows;
+  const timed = rows.filter(r => TIMED_SOURCES.has(String(r.source_type ?? ''))).slice(0, MOMENT_ITEMS);
+  if (timed.length === 0) return rows;
+  const found = await Promise.all(timed.map(r => itemMoments(query, embedding, userId, r)));
+  const byId = new Map(timed.map((r, i) => [r.id, found[i]]));
+  console.error(`[moments] ${found.filter(m => m.length > 0).length}/${timed.length} timed results got moments`);
+  return rows.map(r => {
+    const m = byId.get(r.id);
+    return m && m.length > 0 ? { ...r, moments: m } : r;
+  });
+}
+
 export const searchSchema = z.object({
   query: z.string().min(1).max(500).describe(
     'Natural language search query. Examples: "LLM security", "habit formation", "Andrew Huberman sleep", "AI agents"'
@@ -320,6 +361,7 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
           const ranked = await jevRerank(rerankQuery, results, 10, userId);
           results = (ranked === results ? results : [...applyFilterPrior(ranked.slice(0, 10), filter), ...ranked.slice(10)]).slice(0, limit);
         }
+        results = await attachMoments(baseQuery, enEmbedding ?? embedding, userId, results);
         // Use strategy as match_type so callers can see which retrieval path was used
         const withMatchType = results.map(r => ({
           ...r,

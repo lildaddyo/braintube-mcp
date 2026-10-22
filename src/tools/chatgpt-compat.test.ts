@@ -45,3 +45,11 @@ test('output schemas are plain objects the SDK can validate against', () => {
   assert.ok(normalizeObjectSchema(chatgptSearchOutputSchema));
   assert.ok(normalizeObjectSchema(chatgptFetchOutputSchema));
 });
+
+test('search results pass video moments through and stay schema-valid', () => {
+  const moments = [{ t: 754, url: 'https://www.youtube.com/watch?v=abcDEF12345&t=754s', quote: 'memory is the agent state' }];
+  const out = toSearchResults([{ id: 'a', title: 'T', url: 'https://www.youtube.com/watch?v=abcDEF12345', moments }, { id: 'b', title: 'W', url: 'https://x.test/', moments: [] }]);
+  assert.deepEqual(out.results[0].moments, moments);
+  assert.equal('moments' in out.results[1], false);
+  assert.equal(chatgptSearchOutputSchema.safeParse(out).success, true);
+});
