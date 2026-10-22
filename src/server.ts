@@ -407,7 +407,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'search_knowledge',
     {
-      description: 'Full-text search over your personal BrainTube knowledge corpus. Searches across YouTube, Instagram, web, LinkedIn, GitHub, Twitter and more. Hybrid ranking (semantic + keyword, reciprocal-rank fusion); Bulgarian/Cyrillic queries are also searched in English. Returns taint warnings.',
+      description: 'Full-text search over your personal BrainTube knowledge corpus. Searches across YouTube, Instagram, web, LinkedIn, GitHub, Twitter and more. Hybrid ranking (semantic + keyword, reciprocal-rank fusion); Bulgarian/Cyrillic queries are also searched in English. Video results carry `moments`: the passages that match the query as { t (seconds), url (opens the video at that second), quote }. When you answer from a video, cite the moment url (timestamp link), not the plain video url. Returns taint warnings.',
       inputSchema: searchSchema,
       outputSchema: searchKnowledgeOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
@@ -433,7 +433,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'search',
     {
-      description: 'Search your saved BrainTube library (videos, articles, posts, notes). Returns matching item ids, titles and source URLs; pass an id to fetch for the full text.',
+      description: 'Search your saved BrainTube library (videos, articles, posts, notes). Returns matching item ids, titles and source URLs; video results also carry `moments` ({ t, url, quote }) whose url opens the video at the matching second. Cite those timestamp links when answering from a video. Pass an id to fetch for the full text.',
       inputSchema: chatgptSearchSchema,
       outputSchema: chatgptSearchOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }

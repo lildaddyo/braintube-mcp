@@ -5,7 +5,7 @@
  *
  * Thin adapters over search_knowledge and get_video: same retrieval, same item
  * lookup, same per-user scoping. Only the result shape differs, as OpenAI asks:
- *   search(query)  → { results: [{ id, title, url }] }
+ *   search(query)  → { results: [{ id, title, url, moments? }] }
  *   fetch(id)      → { id, title, text, url, metadata? }
  * returned as structuredContent plus the same object as JSON in one text item.
  * ChatGPT only builds a citation when `url` is non-empty.
@@ -13,6 +13,7 @@
 import { z } from 'zod';
 import { searchKnowledge } from './search.js';
 import { getVideo } from './video.js';
+import { momentSchema, type Moment } from '../lib/moments.js';
 
 export const chatgptSearchSchema = z.object({
   query: z.string().min(1).max(500).describe('Search query over your saved BrainTube library, in natural language.'),
@@ -27,6 +28,8 @@ export const chatgptSearchOutputSchema = z.object({
     id: z.string(),
     title: z.string(),
     url: z.string(),
+    // Videos only: the passages that match the query, each linking to that second (src/lib/moments.ts).
+    moments: z.array(momentSchema).optional(),
   })),
 });
 
@@ -56,6 +59,7 @@ interface ItemRow {
   description?: unknown;
   full_transcript?: unknown;
   tags?: unknown;
+  moments?: unknown;
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
@@ -86,12 +90,13 @@ function jsonResult<T extends Record<string, unknown>>(value: T) {
 
 export function toSearchResults(rows: ItemRow[]): z.infer<typeof chatgptSearchOutputSchema> {
   const seen = new Set<string>();
-  const results: Array<{ id: string; title: string; url: string }> = [];
+  const results: Array<{ id: string; title: string; url: string; moments?: Moment[] }> = [];
   for (const row of rows) {
     const id = str(row.id);
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    results.push({ id, title: str(row.title) || 'Untitled', url: itemUrl(row) });
+    const moments = Array.isArray(row.moments) && row.moments.length > 0 ? (row.moments as Moment[]) : undefined;
+    results.push({ id, title: str(row.title) || 'Untitled', url: itemUrl(row), ...(moments ? { moments } : {}) });
   }
   return { results };
 }

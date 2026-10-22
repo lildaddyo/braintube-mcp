@@ -29,6 +29,7 @@ type Fake = {
   window: (body: any) => Row[];
   translation: string | null;
   rerank: ((query: string, ids: string[]) => Record<string, number>) | 'fail';
+  segments: Record<string, Array<Record<string, unknown>>>;
 };
 let fake: Fake;
 const realFetch = globalThis.fetch;
@@ -51,6 +52,7 @@ function route(url: URL, body: any): Response {
   if (p === '/rest/v1/rpc/adaptive_search') return json(fake.adaptive(body.search_query));
   if (p === '/rest/v1/rpc/search_item_phrases') return json(fake.phrases.map(id => ({ id })));
   if (p === '/rest/v1/rpc/search_items_window') return json(fake.window(body));
+  if (p === '/rest/v1/rpc/search_segments') return json((body.p_item_ids as string[]).flatMap(id => fake.segments[id] ?? []));
   if (p === '/rest/v1/rpc/increment_retrieval_stats') return new Response(null, { status: 204 });
   if (p === '/rest/v1/retrieval_log' || p === '/rest/v1/mcp_retrieval_log') return new Response(null, { status: 201 });
   if (p === '/rest/v1/items') return json(fake.items);
@@ -65,7 +67,7 @@ function route(url: URL, body: any): Response {
 beforeEach(() => {
   clearCaches();
   for (const k of ENV_KEYS) { savedEnv[k] = process.env[k]; delete process.env[k]; }
-  fake = { calls: [], adaptive: () => [], phrases: [], items: [], window: () => [], translation: null, rerank: 'fail' };
+  fake = { calls: [], adaptive: () => [], phrases: [], items: [], window: () => [], translation: null, rerank: 'fail', segments: {} };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     const raw = init?.body ?? (input instanceof Request ? await input.text() : undefined);
@@ -288,4 +290,46 @@ test('a failed re-rank is not cached: the next search calls jev-rerank again', a
   const res = await searchKnowledge({ query: 'agent memory design', limit: 3 }, USER);
   assert.ok(callsTo('/functions/v1/jev-rerank').length > reranks);
   assert.equal(ids(res)[0], 'a7');
+});
+
+test('timed results carry moments from search_segments (scoped per item); other rows are unchanged', async () => {
+  fake.adaptive = () => [
+    row('v1', 0.9, { source_type: 'youtube', url: 'https://www.youtube.com/watch?v=abcDEF12345' } as any),
+    row('w1', 0.8),
+    row('v2', 0.7, { source_type: 'youtube', url: 'https://youtu.be/zzzYYY00011' } as any),
+  ];
+  fake.segments = {
+    v1: [
+      { item_id: 'v1', segment_text: '  memory is   the agent state ', start_time_sec: '754.6', combined_score: 0.62 },
+      { item_id: 'v1', segment_text: 'right after the previous one', start_time_sec: '760', combined_score: 0.6 },  // same passage
+      { item_id: 'v1', segment_text: 'later point', start_time_sec: '1200', combined_score: 0.5 },
+      { item_id: 'v1', segment_text: 'weak match', start_time_sec: '1500', combined_score: 0.1 },                   // below floor
+    ],
+  };
+  const res = await searchKnowledge({ query: 'agent memory design', limit: 3 }, USER);
+  const data = (res.structuredContent as any).data as Array<any>;
+  assert.deepEqual(data.map(r => r.id), ['v1', 'w1', 'v2']);
+  assert.deepEqual(data[0].moments, [
+    { t: 754, url: 'https://www.youtube.com/watch?v=abcDEF12345&t=754s', quote: 'memory is the agent state' },
+    { t: 1200, url: 'https://www.youtube.com/watch?v=abcDEF12345&t=1200s', quote: 'later point' },
+  ]);
+  assert.equal('moments' in data[1], false);   // web row: not asked, no field
+  assert.equal('moments' in data[2], false);   // video without matching segments: no field
+  const seg = callsTo('/rest/v1/rpc/search_segments');
+  assert.deepEqual(seg.map(c => c.body.p_item_ids).sort(), [['v1'], ['v2']]);
+  assert.ok(seg.every(c => c.body.p_user_id === USER));
+  assert.match(res.content[0].text, /watch\?v=abcDEF12345&t=754s/);
+});
+
+test('moments fail open: unusable segment rows add no field; SEARCH_MOMENTS=off skips the RPC', async () => {
+  fake.adaptive = () => [row('v1', 0.9, { source_type: 'youtube', url: 'https://www.youtube.com/watch?v=abcDEF12345' } as any)];
+  fake.segments = { v1: [{ item_id: 'v1', segment_text: 'x', start_time_sec: 'not-a-number', combined_score: 0.9 }] };
+  let res = await searchKnowledge({ query: 'agent memory design', limit: 1 }, USER);
+  assert.equal('moments' in (res.structuredContent as any).data[0], false);
+  process.env.SEARCH_MOMENTS = 'off';
+  try {
+    fake.calls = [];
+    res = await searchKnowledge({ query: 'agent memory design two', limit: 1 }, USER);
+    assert.equal(callsTo('/rest/v1/rpc/search_segments').length, 0);
+  } finally { delete process.env.SEARCH_MOMENTS; }
 });
