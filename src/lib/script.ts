@@ -3,10 +3,12 @@
 // are byte-identical copies, and both test suites run the same table (script-cases.ts). Change both together.
 //
 // Letters are \p{L}. A Hangul syllable, a Han character or a kana stands for a whole syllable or word, so it
-// weighs 2; every other letter (Latin, Cyrillic, Hangul jamo, Greek, ...) weighs 1. A text is non-Latin when the
-// non-Latin share of the weighted letters is at least 0.3 and the non-Latin weight is at least 3. So "영상"
-// (2 syllables, weight 4), "памет" and "iPhone 리뷰" are non-Latin; "café", "iPhone review", "책", numbers and
-// emoji are not.
+// weighs 2; every other letter (Latin, Cyrillic, Hangul jamo, Greek, ...) weighs 1. A text is non-Latin when its
+// non-Latin weight is at least 3 and either the non-Latin share of the weighted letters is at least 0.3 or the
+// non-Latin weight is at least 6 (code-switching: a few real words in another script among Latin names, as in
+// "Търся instagram поста за minimalist Rust framework"). So "영상" (2 syllables, weight 4), "памет" and
+// "iPhone 리뷰" are non-Latin; "café", "iPhone review", "Maven Smart System на Palantir", "책", numbers and emoji
+// are not.
 
 export type Script =
   | "latin" | "cyrillic" | "hangul" | "han" | "kana" | "greek" | "arabic" | "hebrew" | "thai" | "devanagari"
@@ -25,6 +27,7 @@ export interface ScriptInfo {
 
 export const NON_LATIN_MIN_SHARE = 0.3;
 export const NON_LATIN_MIN_WEIGHT = 3;
+export const NON_LATIN_ANY_SHARE_WEIGHT = 6;
 
 const SCRIPTS: Array<[Exclude<Script, "other" | "none">, RegExp]> = [
   ["latin", /\p{Script=Latin}/u],
@@ -71,6 +74,7 @@ export function detectScript(text: string | null | undefined): ScriptInfo {
     script,
     nonLatinShare,
     nonLatinWeight,
-    nonLatin: nonLatinShare >= NON_LATIN_MIN_SHARE && nonLatinWeight >= NON_LATIN_MIN_WEIGHT,
+    nonLatin: nonLatinWeight >= NON_LATIN_MIN_WEIGHT &&
+      (nonLatinShare >= NON_LATIN_MIN_SHARE || nonLatinWeight >= NON_LATIN_ANY_SHARE_WEIGHT),
   };
 }
