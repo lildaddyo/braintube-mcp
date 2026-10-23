@@ -10,7 +10,8 @@ process.env.SUPABASE_URL = 'http://supabase.test';
 process.env.SUPABASE_SERVICE_ROLE_KEY = ['fixture', 'service', 'role'].join('-');
 process.env.OPENAI_API_KEY = ['fixture', 'openai', 'key'].join('-');
 
-const { searchKnowledge } = await import('./search.js');
+const { searchKnowledge, crossLingualScript } = await import('./search.js');
+const { SCRIPT_CASES } = await import('../lib/script-cases.js');
 const { clearCaches, cacheStats } = await import('../lib/ttl-cache.js');
 
 const USER = '00000000-0000-4000-8000-000000000001';
@@ -33,7 +34,7 @@ type Fake = {
 };
 let fake: Fake;
 const realFetch = globalThis.fetch;
-const ENV_KEYS = ['JEV_RERANK', 'PHRASE_RECALL', 'QUERY_FILTER', 'SEARCH_LOW_CONFIDENCE_THRESHOLD'] as const;
+const ENV_KEYS = ['JEV_RERANK', 'PHRASE_RECALL', 'QUERY_FILTER', 'SEARCH_LOW_CONFIDENCE_THRESHOLD', 'XL_ALL_SCRIPTS'] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -250,6 +251,53 @@ test('a Cyrillic query whose translation fails still searches the original text'
   assert.equal(callsTo('/rest/v1/rpc/adaptive_search').length, 1);
   assert.equal(callsTo('/rest/v1/rpc/search_item_phrases').length, 0);   // Cyrillic phrases are only searched in English
   assert.deepEqual(ids(res), ['a1', 'a0']);
+});
+
+test('crossLingualScript: default = any Cyrillic letter, XL_ALL_SCRIPTS=on = the shared detector', () => {
+  for (const c of SCRIPT_CASES) {
+    assert.equal(crossLingualScript(c.text), /[Ѐ-ӿ]/.test(c.text) ? 'cyrillic' : null, c.text);
+  }
+  process.env.XL_ALL_SCRIPTS = 'on';
+  for (const c of SCRIPT_CASES) assert.equal(crossLingualScript(c.text), c.nonLatin ? c.script : null, c.text);
+});
+
+test('XL_ALL_SCRIPTS off (default): a Korean query is searched in Korean only', async () => {
+  fake.translation = 'save video';
+  fake.adaptive = () => tenRows();
+  fake.rerank = rankBy(['a1']);
+  await searchKnowledge({ query: '영상 저장', limit: 2 }, USER);
+  assert.deepEqual(callsTo('/rest/v1/rpc/adaptive_search').map(c => c.body.search_query), ['영상 저장']);
+});
+
+test('XL_ALL_SCRIPTS=on: a Korean query also runs in English, phrase recall and re-rank on the English text', async () => {
+  process.env.XL_ALL_SCRIPTS = 'on';
+  const ko = Array.from({ length: 10 }, (_, i) => row(`k${i}`, 0.9 - i / 100));
+  const en = Array.from({ length: 12 }, (_, i) => row(`e${i}`, 0.5 - i / 100));
+  fake.translation = 'iPhone review';
+  fake.adaptive = (q) => (q === 'iPhone review' ? en : ko);
+  fake.phrases = [];
+  fake.rerank = rankBy(['e2', 'k1']);
+  const res = await searchKnowledge({ query: 'iPhone 리뷰', limit: 2 }, USER);
+  assert.deepEqual(callsTo('/rest/v1/rpc/adaptive_search').map(c => c.body.search_query), ['iPhone 리뷰', 'iPhone review']);
+  const ph = callsTo('/rest/v1/rpc/search_item_phrases');
+  assert.equal(ph.length, 1);
+  assert.deepEqual(ph[0].body.query_embedding, embed('iPhone review'));
+  assert.equal(callsTo('/functions/v1/jev-rerank')[0].body.query, 'iPhone review');
+  assert.deepEqual(ids(res), ['e2', 'k1']);
+});
+
+test('XL_ALL_SCRIPTS=on: an English query takes exactly the default path', async () => {
+  for (const flag of [undefined, 'on']) {
+    if (flag) process.env.XL_ALL_SCRIPTS = flag; else delete process.env.XL_ALL_SCRIPTS;
+    fake.calls = [];
+    fake.translation = 'should not be used';
+    fake.adaptive = () => tenRows();
+    fake.rerank = rankBy(['a3']);
+    const res = await searchKnowledge({ query: 'naïve résumé tips from the café video', limit: 2 }, USER);
+    assert.equal(callsTo('/rest/v1/rpc/adaptive_search').length, 1);
+    assert.equal(fake.calls.filter(c => c.url.includes('/chat/completions')).length, 0);
+    assert.deepEqual(ids(res), ['a3', 'a0']);
+  }
 });
 
 test('an adaptive RPC error falls back to the keyword search', async () => {
