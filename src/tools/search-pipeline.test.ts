@@ -286,6 +286,19 @@ test('XL_ALL_SCRIPTS=on: a Korean query also runs in English, phrase recall and 
   assert.deepEqual(ids(res), ['e2', 'k1']);
 });
 
+test('a 2-syllable Korean query reaches the hybrid path only with XL_ALL_SCRIPTS=on', async () => {
+  fake.translation = 'video';
+  fake.adaptive = () => tenRows();
+  fake.items = [row('k1', 0)];
+  fake.rerank = rankBy(['a1']);
+  await searchKnowledge({ query: '영상', limit: 2 }, USER);
+  assert.equal(callsTo('/rest/v1/rpc/adaptive_search').length, 0);       // default: keyword fallback, as before
+  fake.calls = [];
+  process.env.XL_ALL_SCRIPTS = 'on';
+  await searchKnowledge({ query: '영상', limit: 2 }, USER);
+  assert.deepEqual(callsTo('/rest/v1/rpc/adaptive_search').map(c => c.body.search_query), ['영상', 'video']);
+});
+
 test('XL_ALL_SCRIPTS=on: an English query takes exactly the default path', async () => {
   for (const flag of [undefined, 'on']) {
     if (flag) process.env.XL_ALL_SCRIPTS = flag; else delete process.env.XL_ALL_SCRIPTS;

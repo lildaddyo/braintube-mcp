@@ -124,9 +124,10 @@ async function jevRerank(query: string, rows: AdaptiveResult[], windowSize = 10,
 // (lib/script.ts, the same rule as brain-chat), so Korean, Japanese, Greek, ... queries reach English videos too.
 const XL_ALL_SCRIPTS_DEFAULT = 'off';
 const hasCyrillic = (s: string) => [...s].some(ch => { const cp = ch.codePointAt(0) ?? 0; return cp >= 0x400 && cp <= 0x4ff; });
+const xlAllScripts = () => (process.env.XL_ALL_SCRIPTS ?? XL_ALL_SCRIPTS_DEFAULT) === 'on';
 /** Script name when the query also runs in English, else null. */
 export function crossLingualScript(query: string): string | null {
-  if ((process.env.XL_ALL_SCRIPTS ?? XL_ALL_SCRIPTS_DEFAULT) === 'on') {
+  if (xlAllScripts()) {
     const info = detectScript(query);
     return info.nonLatin ? info.script : null;
   }
@@ -299,7 +300,8 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
   const { query, limit } = input;
 
   const hasApiKey = !!process.env.OPENAI_API_KEY;
-  const queryLongEnough = query.trim().length >= 3;
+  // XL_ALL_SCRIPTS=on: two Hangul syllables or kanji ("영상") are a whole word, so they reach the hybrid path too.
+  const queryLongEnough = query.trim().length >= 3 || (xlAllScripts() && detectScript(query).nonLatin);
   console.error(`[search] query="${query.slice(0, 80)}", limit=${limit}, hasApiKey=${hasApiKey}`);
 
   // ── Hybrid path (vector + full-text RRF) ─────────────────────────────────────
