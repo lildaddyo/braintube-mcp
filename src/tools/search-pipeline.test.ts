@@ -253,15 +253,19 @@ test('a Cyrillic query whose translation fails still searches the original text'
   assert.deepEqual(ids(res), ['a1', 'a0']);
 });
 
-test('crossLingualScript: default = any Cyrillic letter, XL_ALL_SCRIPTS=on = the shared detector', () => {
+test('crossLingualScript: XL_ALL_SCRIPTS=off = any Cyrillic letter, on (the default) = the shared detector', () => {
+  process.env.XL_ALL_SCRIPTS = 'off';
   for (const c of SCRIPT_CASES) {
     assert.equal(crossLingualScript(c.text), /[Ѐ-ӿ]/.test(c.text) ? 'cyrillic' : null, c.text);
   }
-  process.env.XL_ALL_SCRIPTS = 'on';
-  for (const c of SCRIPT_CASES) assert.equal(crossLingualScript(c.text), c.nonLatin ? c.script : null, c.text);
+  for (const flag of [undefined, 'on']) {
+    if (flag) process.env.XL_ALL_SCRIPTS = flag; else delete process.env.XL_ALL_SCRIPTS;
+    for (const c of SCRIPT_CASES) assert.equal(crossLingualScript(c.text), c.nonLatin ? c.script : null, c.text);
+  }
 });
 
-test('XL_ALL_SCRIPTS off (default): a Korean query is searched in Korean only', async () => {
+test('XL_ALL_SCRIPTS=off: a Korean query is searched in Korean only (the rule before 2026-10-24)', async () => {
+  process.env.XL_ALL_SCRIPTS = 'off';
   fake.translation = 'save video';
   fake.adaptive = () => tenRows();
   fake.rerank = rankBy(['a1']);
@@ -269,8 +273,7 @@ test('XL_ALL_SCRIPTS off (default): a Korean query is searched in Korean only', 
   assert.deepEqual(callsTo('/rest/v1/rpc/adaptive_search').map(c => c.body.search_query), ['영상 저장']);
 });
 
-test('XL_ALL_SCRIPTS=on: a Korean query also runs in English, phrase recall and re-rank on the English text', async () => {
-  process.env.XL_ALL_SCRIPTS = 'on';
+test('XL_ALL_SCRIPTS on (default): a Korean query also runs in English, phrase recall and re-rank on the English text', async () => {
   const ko = Array.from({ length: 10 }, (_, i) => row(`k${i}`, 0.9 - i / 100));
   const en = Array.from({ length: 12 }, (_, i) => row(`e${i}`, 0.5 - i / 100));
   fake.translation = 'iPhone review';
@@ -286,21 +289,22 @@ test('XL_ALL_SCRIPTS=on: a Korean query also runs in English, phrase recall and 
   assert.deepEqual(ids(res), ['e2', 'k1']);
 });
 
-test('a 2-syllable Korean query reaches the hybrid path only with XL_ALL_SCRIPTS=on', async () => {
+test('a 2-syllable Korean query reaches the hybrid path only with XL_ALL_SCRIPTS on', async () => {
+  process.env.XL_ALL_SCRIPTS = 'off';
   fake.translation = 'video';
   fake.adaptive = () => tenRows();
   fake.items = [row('k1', 0)];
   fake.rerank = rankBy(['a1']);
   await searchKnowledge({ query: '영상', limit: 2 }, USER);
-  assert.equal(callsTo('/rest/v1/rpc/adaptive_search').length, 0);       // default: keyword fallback, as before
+  assert.equal(callsTo('/rest/v1/rpc/adaptive_search').length, 0);       // off: keyword fallback, as before
   fake.calls = [];
-  process.env.XL_ALL_SCRIPTS = 'on';
+  delete process.env.XL_ALL_SCRIPTS;
   await searchKnowledge({ query: '영상', limit: 2 }, USER);
   assert.deepEqual(callsTo('/rest/v1/rpc/adaptive_search').map(c => c.body.search_query), ['영상', 'video']);
 });
 
-test('XL_ALL_SCRIPTS=on: an English query takes exactly the default path', async () => {
-  for (const flag of [undefined, 'on']) {
+test('an English query takes exactly the same path with XL_ALL_SCRIPTS off and on', async () => {
+  for (const flag of ['off', undefined]) {
     if (flag) process.env.XL_ALL_SCRIPTS = flag; else delete process.env.XL_ALL_SCRIPTS;
     fake.calls = [];
     fake.translation = 'should not be used';
