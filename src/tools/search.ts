@@ -7,6 +7,7 @@ import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 import type { AdaptiveResult } from '../db/supabase.js';
 import { parseQueryFilter, queryTopic, applyFilterPrior, type QueryFilter } from '../lib/query-filter.js';
 import { pickMoments, TIMED_SOURCES, type Moment, type SegmentRow } from '../lib/moments.js';
+import { detectScript } from '../lib/script.js';
 
 async function logRetrieval(
   userId: string,
@@ -116,10 +117,22 @@ async function jevRerank(query: string, rows: AdaptiveResult[], windowSize = 10,
 // query (RPC search_item_phrases, service_role only; it already drops archived, adult and taint>=3 items).
 // Phrase-only rows are hydrated with the columns adaptive_search returns and are ONLY ever returned after
 // jev-rerank has scored them - if the re-rank does not happen they are dropped (fail open = the adaptive result).
-// Inert when JEV_RERANK=off; kill switch: PHRASE_RECALL=off. Cyrillic queries are not touched.
+// Inert when JEV_RERANK=off; kill switch: PHRASE_RECALL=off. Cross-lingual queries run it on their English translation.
 
-// Same test as the cross-lingual branch in searchKnowledge (U+0400-U+04FF), written with code points.
+// Which queries also run in English (F3, 2026-09-25). Default: any Cyrillic character (U+0400-U+04FF).
+// XL_ALL_SCRIPTS=on (Korean retrieval brief v2, Phase 1): every non-Latin query by the shared script detector
+// (lib/script.ts, the same rule as brain-chat), so Korean, Japanese, Greek, ... queries reach English videos too.
+const XL_ALL_SCRIPTS_DEFAULT = 'off';
 const hasCyrillic = (s: string) => [...s].some(ch => { const cp = ch.codePointAt(0) ?? 0; return cp >= 0x400 && cp <= 0x4ff; });
+const xlAllScripts = () => (process.env.XL_ALL_SCRIPTS ?? XL_ALL_SCRIPTS_DEFAULT) === 'on';
+/** Script name when the query also runs in English, else null. */
+export function crossLingualScript(query: string): string | null {
+  if (xlAllScripts()) {
+    const info = detectScript(query);
+    return info.nonLatin ? info.script : null;
+  }
+  return hasCyrillic(query) ? 'cyrillic' : null;
+}
 
 /** Ids of the user's items whose best search-phrase matches the query embedding, best first. Any error/timeout -> []. */
 async function phraseRecall(embedding: number[], userId: string): Promise<string[]> {
@@ -287,7 +300,8 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
   const { query, limit } = input;
 
   const hasApiKey = !!process.env.OPENAI_API_KEY;
-  const queryLongEnough = query.trim().length >= 3;
+  // XL_ALL_SCRIPTS=on: two Hangul syllables or kanji ("영상") are a whole word, so they reach the hybrid path too.
+  const queryLongEnough = query.trim().length >= 3 || (xlAllScripts() && detectScript(query).nonLatin);
   console.error(`[search] query="${query.slice(0, 80)}", limit=${limit}, hasApiKey=${hasApiKey}`);
 
   // ── Hybrid path (vector + full-text RRF) ─────────────────────────────────────
@@ -301,22 +315,23 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
       // With JEV_RERANK=off nothing changes (fetchLimit === limit).
       const rerankOn = process.env.JEV_RERANK !== 'off';
       const fetchLimit = rerankOn ? Math.max(limit, 10) : limit;
-      const cyrillic = hasCyrillic(query);
-      // cc-rrk3: start phrase recall alongside adaptive_search (only when the JEV re-rank is on). Cyrillic queries run it
+      const xlScript = crossLingualScript(query);
+      const crossLingual = xlScript !== null;
+      // cc-rrk3: start phrase recall alongside adaptive_search (only when the JEV re-rank is on). Cross-lingual queries run it
       // on their English translation below (QA 2026-10-15b: the phrases are English).
       const phraseOn = rerankOn && process.env.PHRASE_RECALL !== 'off';
-      let phrasePromise = phraseOn && !cyrillic ? phraseRecall(embedding, userId) : null;
+      let phrasePromise = phraseOn && !crossLingual ? phraseRecall(embedding, userId) : null;
       let results = await adaptiveSearchRpc(query, embedding, userId, fetchLimit);
       console.error(`[search] adaptive returned ${results.length} results`);
 
-      // ── Cross-lingual (F3, 2026-09-25): Cyrillic queries also run in English ──
+      // ── Cross-lingual (F3, 2026-09-25): Cyrillic (XL_ALL_SCRIPTS=on: every non-Latin) queries also run in English ──
       // QA 2026-10-15b: keep the union of both lists (up to 20) for the re-rank pool, re-rank against the English text.
       let enQuery: string | null = null;
       let enEmbedding: number[] | null = null;
-      if (cyrillic) {
+      if (crossLingual) {
         const translated = await translateQueryToEnglish(query);
         if (translated) {
-          console.error(`[search] cross-lingual: "${translated.slice(0, 80)}"`);
+          console.error(`[search] cross-lingual (${xlScript}): "${translated.slice(0, 80)}"`);
           enQuery = translated;
           enEmbedding = await generateEmbedding(translated);
           if (phraseOn) phrasePromise = phraseRecall(enEmbedding, userId);
@@ -346,9 +361,9 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
         void logRetrieval(userId, query, retrieved);
         // JEV re-rank of the top-10 window (cc-rrk1/rrk2), then trim to the caller's limit (kill switch JEV_RERANK=off).
         // cc-rrk3 + QA 2026-10-15b: the pool is adaptive top-10 (in order) + date/source window rows + the rest of the
-        // Cyrillic/English union + phrase-only rows (max 20), and the WHOLE pool is scored; rows outside the pool stay after it.
+        // original/English union + phrase-only rows (max 20), and the WHOLE pool is scored; rows outside the pool stay after it.
         const windowRows = windowPromise ? await windowPromise : [];
-        const more = cyrillic && rerankOn ? results.slice(10, 20) : [];
+        const more = crossLingual && rerankOn ? results.slice(10, 20) : [];
         const phraseOnly = phrasePromise ? await hydratePhraseOnly(await phrasePromise, [...results, ...windowRows], userId) : [];
         const extras = [...windowRows, ...more, ...phraseOnly];
         if (extras.length > 0) {
