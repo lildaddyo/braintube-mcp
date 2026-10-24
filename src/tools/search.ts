@@ -119,10 +119,10 @@ async function jevRerank(query: string, rows: AdaptiveResult[], windowSize = 10,
 // jev-rerank has scored them - if the re-rank does not happen they are dropped (fail open = the adaptive result).
 // Inert when JEV_RERANK=off; kill switch: PHRASE_RECALL=off. Cross-lingual queries run it on their English translation.
 
-// Which queries also run in English (F3, 2026-09-25). Default: any Cyrillic character (U+0400-U+04FF).
-// XL_ALL_SCRIPTS=on (Korean retrieval brief v2, Phase 1): every non-Latin query by the shared script detector
-// (lib/script.ts, the same rule as brain-chat), so Korean, Japanese, Greek, ... queries reach English videos too.
-const XL_ALL_SCRIPTS_DEFAULT = 'off';
+// Which queries also run in English. Default (Korean retrieval brief v2, Phase 1, on since 2026-10-24): every non-Latin
+// query by the shared script detector (lib/script.ts, the same rule as brain-chat), so Korean, Japanese, Greek, ...
+// queries reach English videos too. Kill switch XL_ALL_SCRIPTS=off: the F3 rule, any Cyrillic character (U+0400-U+04FF).
+const XL_ALL_SCRIPTS_DEFAULT = 'on';
 const hasCyrillic = (s: string) => [...s].some(ch => { const cp = ch.codePointAt(0) ?? 0; return cp >= 0x400 && cp <= 0x4ff; });
 const xlAllScripts = () => (process.env.XL_ALL_SCRIPTS ?? XL_ALL_SCRIPTS_DEFAULT) === 'on';
 /** Script name when the query also runs in English, else null. */
@@ -300,7 +300,7 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
   const { query, limit } = input;
 
   const hasApiKey = !!process.env.OPENAI_API_KEY;
-  // XL_ALL_SCRIPTS=on: two Hangul syllables or kanji ("영상") are a whole word, so they reach the hybrid path too.
+  // Two Hangul syllables or kanji ("영상") are a whole word, so they reach the hybrid path too (not with XL_ALL_SCRIPTS=off).
   const queryLongEnough = query.trim().length >= 3 || (xlAllScripts() && detectScript(query).nonLatin);
   console.error(`[search] query="${query.slice(0, 80)}", limit=${limit}, hasApiKey=${hasApiKey}`);
 
@@ -324,7 +324,7 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
       let results = await adaptiveSearchRpc(query, embedding, userId, fetchLimit);
       console.error(`[search] adaptive returned ${results.length} results`);
 
-      // ── Cross-lingual (F3, 2026-09-25): Cyrillic (XL_ALL_SCRIPTS=on: every non-Latin) queries also run in English ──
+      // ── Cross-lingual (F3, 2026-09-25; every non-Latin script since 2026-10-24): the query also runs in English ──
       // QA 2026-10-15b: keep the union of both lists (up to 20) for the re-rank pool, re-rank against the English text.
       let enQuery: string | null = null;
       let enEmbedding: number[] | null = null;

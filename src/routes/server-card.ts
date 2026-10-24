@@ -126,7 +126,7 @@ export interface ToolAnnotations {
 const CARD_TOOLS = [
   {
     name: 'search_knowledge',
-    description: 'Full-text search over your personal BrainTube knowledge corpus. Searches across YouTube, Instagram, web, LinkedIn, GitHub, Twitter and more. Hybrid ranking (semantic + keyword, reciprocal-rank fusion); Bulgarian/Cyrillic queries are also searched in English. Video results carry `moments` ({ t, url, quote }): cite the moment url, which opens the video at the matching second.',
+    description: 'Full-text search over your personal BrainTube knowledge corpus. Searches across YouTube, Instagram, web, LinkedIn, GitHub, Twitter and more. Hybrid ranking (semantic + keyword, reciprocal-rank fusion); Non-Latin queries (Bulgarian, Korean, Japanese, ...) are also searched in English. Video results carry `moments` ({ t, url, quote }): cite the moment url, which opens the video at the matching second.',
     inputSchema: toInputSchema(searchSchema),
     outputSchema: toOutputSchema(searchKnowledgeOutputSchema),
     annotations: { readOnlyHint: true, openWorldHint: false },
