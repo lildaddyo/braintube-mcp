@@ -8,6 +8,7 @@ import type { AdaptiveResult } from '../db/supabase.js';
 import { parseQueryFilter, queryTopic, applyFilterPrior, type QueryFilter } from '../lib/query-filter.js';
 import { pickMoments, TIMED_SOURCES, type Moment, type SegmentRow } from '../lib/moments.js';
 import { detectScript } from '../lib/script.js';
+import { lexicalRpc } from '../lib/lexical-nl.js';
 
 async function logRetrieval(
   userId: string,
@@ -231,7 +232,7 @@ const MOMENT_ITEMS = 5;
 async function itemMoments(query: string, embedding: number[], userId: string, row: AdaptiveResult): Promise<Moment[]> {
   try {
     const { data, error } = await dbAdmin
-      .rpc('search_segments', {
+      .rpc(lexicalRpc('search_segments', query), {
         p_user_id: userId, p_query: query, p_query_embedding: JSON.stringify(embedding), p_limit: 6, p_item_ids: [row.id],
       })
       .abortSignal(AbortSignal.timeout(2500));
