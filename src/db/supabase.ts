@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { lexicalRpc } from '../lib/lexical-nl.js';
 
 // Lazy singleton — avoids throwing at import time when env vars aren't set
 // yet (e.g. Glama's sandbox boot/ping check, which starts the process with
@@ -414,7 +415,7 @@ export async function hybridSearchRpc(
 ): Promise<HybridResult[]> {
   console.error(`[hybridSearchRpc] query="${query.slice(0, 80)}", dims=${embedding.length}, limit=${limit}`);
 
-  const { data, error } = await dbAdmin.rpc('hybrid_search', {
+  const { data, error } = await dbAdmin.rpc(lexicalRpc('hybrid_search', query), {
     search_query:    query,
     query_embedding: embedding,
     filter_user_id:  userId,
@@ -460,7 +461,7 @@ export async function adaptiveSearchRpc(
 ): Promise<AdaptiveResult[]> {
   console.error(`[adaptiveSearchRpc] query="${query.slice(0, 80)}", dims=${embedding.length}, limit=${limit}`);
 
-  const call = () => dbAdmin.rpc('adaptive_search', {
+  const call = () => dbAdmin.rpc(lexicalRpc('adaptive_search', query), {
     search_query:    query,
     query_embedding: embedding,
     filter_user_id:  userId,
