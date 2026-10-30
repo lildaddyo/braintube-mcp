@@ -17,7 +17,7 @@ import { mcpBrowserLanding } from './routes/browser-landing.js';
 import { serverCardRouter } from './routes/server-card.js';
 import { glamaRouter } from './routes/glama.js';
 import { restRouter } from './routes/rest.js';
-import { sessionIngestBodyParser, sessionIngestRouter } from './routes/session-ingest.js';
+import { sessionIngestBodyParser, sessionIngestRouter, sessionIngestIdle } from './routes/session-ingest.js';
 import { buildOpenApiSpec } from './routes/openapi.js';
 import { ingestContent, DailyIngestLimitError } from './tools/ingest.js';
 import { summariseConversation } from './tools/summarise.js';
@@ -26,6 +26,7 @@ import { backfillEmbeddings } from './tools/embedding.js';
 import { validateMcpOrigin } from './security/origin.js';
 import { resolveUserRole } from './security/tool-access.js';
 import { SessionStore, envInt } from './lib/session-store.js';
+import { createInFlightTracker, createGracefulShutdown } from './lib/shutdown.js';
 import type { AuthContext } from './types.js';
 
 // Resolve package.json relative to this file so /health reports the actual
@@ -38,6 +39,10 @@ const pkg = JSON.parse(
 ) as { version: string };
 
 const app = express();
+// Counts requests in flight for the graceful shutdown. GET /mcp is a long-lived SSE stream, so it is
+// not waited for; those streams are ended by closing the MCP transports at the end of the drain.
+const inFlight = createInFlightTracker((req) => req.method === 'GET' && req.path === '/mcp');
+app.use(inFlight.middleware);
 app.use(helmet());
 // POST /api/session-ingest takes up to 5 MB of JSON, so it gets its own parser AHEAD of the 100 kb global
 // one below. requireAuth runs first: an unauthenticated caller must never be able to make us buffer 5 MB.
@@ -485,13 +490,33 @@ async function bootStdio(): Promise<void> {
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
+const httpServer = app.listen(PORT, '0.0.0.0', () => {
   console.error(`BrainTube MCP v3 running on port ${PORT}`);
   console.error(`Health:   http://localhost:${PORT}/health`);
   console.error(`MCP:      http://localhost:${PORT}/mcp`);
   console.error(`MCP URL:  http://localhost:${PORT}/mcp-url`);
   console.error(`Obsidian: http://localhost:${PORT}/api/obsidian-sync`);
 });
+
+// ─── Graceful shutdown ────────────────────────────────────────────────────────
+// Railway sends SIGTERM on every deploy. Stop accepting connections, let in-flight requests and the
+// session-ingest embedding jobs finish (up to SHUTDOWN_TIMEOUT_MS, default 25 s), then close every MCP
+// transport (ends SSE streams so clients reconnect to the new deploy) and exit.
+const SHUTDOWN_TIMEOUT_MS = envInt('SHUTDOWN_TIMEOUT_MS', 25_000);
+const shutdown = createGracefulShutdown({
+  server: httpServer,
+  timeoutMs: SHUTDOWN_TIMEOUT_MS,
+  onStart: () => inFlight.startDraining(),
+  drain: async () => {
+    await Promise.all([inFlight.idle(), sessionIngestIdle()]);
+  },
+  beforeExit: () => {
+    const closed = mcpSessions.closeAll();
+    if (closed > 0) console.error(`[shutdown] closed ${closed} MCP session(s)`);
+  },
+});
+process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
+process.once('SIGINT', () => { void shutdown('SIGINT'); });
 
 bootStdio().catch((err) => {
   console.error('[stdio] failed to start stdio transport (HTTP transport unaffected):', err instanceof Error ? err.message : String(err));

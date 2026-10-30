@@ -710,7 +710,7 @@ const guarded =
 
 /**
  * Builds the router. `idle()` resolves once every background embedding job started so far has
- * finished (used by the tests; production never awaits it).
+ * finished (used by the tests and by the graceful shutdown in index.ts).
  */
 export function createSessionIngest(overrides: Partial<SessionIngestDeps> = {}) {
   const db = overrides.db ?? dbAdmin;
@@ -853,4 +853,7 @@ export function createSessionIngest(overrides: Partial<SessionIngestDeps> = {}) 
 }
 
 /** The instance index.ts mounts: real service-role client, real OpenAI embeddings. */
-export const sessionIngestRouter = createSessionIngest().router;
+const sessionIngest = createSessionIngest();
+export const sessionIngestRouter = sessionIngest.router;
+/** Resolves once the background embedding jobs started so far are done (graceful shutdown awaits it). */
+export const sessionIngestIdle = sessionIngest.idle;
