@@ -98,3 +98,12 @@ test('DCR honours token_endpoint_auth_method "none" (ChatGPT) and keeps client_s
     server.close();
   }
 });
+
+// --- Apple sign-in (2026-10-30): accounts made with Sign in with Apple have no password ---
+
+test('login page offers Apple next to Google, through the same start route', () => {
+  const html = loginForm('s1');
+  assert.ok(html.includes('href="/oauth/google/start?state=s1"'));
+  assert.ok(html.includes('href="/oauth/google/start?state=s1&amp;provider=apple"'));
+  assert.ok(html.includes('Continue with Apple'));
+});
