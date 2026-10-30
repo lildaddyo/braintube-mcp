@@ -3,6 +3,8 @@
  * Reads ANTHROPIC_API_KEY from the environment — never exposed to clients.
  */
 
+import { TIMEOUTS } from '../lib/timeouts.js';
+
 const ANTHROPIC_API   = 'https://api.anthropic.com/v1/messages';
 // Haiku 4.5: a ~300-token digest doesn't need Sonnet, and capture is free to the user.
 // (claude-sonnet-4-20250514 is deprecated and cost ~4.4 cents per 50k-char capture vs ~1.5.)
@@ -58,6 +60,7 @@ ${truncated}`;
       max_tokens: 400,
       messages: [{ role: 'user', content: prompt }],
     }),
+    signal: AbortSignal.timeout(TIMEOUTS.anthropicSummaryMs),
   });
 
   if (!resp.ok) {

@@ -1,6 +1,16 @@
 import OpenAI from 'openai';
 import { embeddingCache, translationCache, normaliseQuery, hashKey } from './ttl-cache.js';
 import { logOpenAiUsage } from './usage-log.js';
+import { TIMEOUTS } from './timeouts.js';
+
+/**
+ * OpenAI client for embeddings with a bounded budget (F6): the SDK default is 600 s and 2 retries,
+ * so a hung request could hold a search for half an hour. Built per call, so the server still
+ * boots without OPENAI_API_KEY.
+ */
+export function embeddingClient(timeoutMs: number = TIMEOUTS.openAiEmbedMs): OpenAI {
+  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: timeoutMs, maxRetries: TIMEOUTS.openAiMaxRetries });
+}
 
 // Texts up to this length are query-sized and get memoised; longer ones (item bodies at ingest) rarely repeat.
 const CACHEABLE_EMBED_CHARS = 2000;
@@ -27,7 +37,7 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 /** Embed many texts in one request (order kept). */
 export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const openai = embeddingClient(TIMEOUTS.openAiEmbedBatchMs);
   const t0 = Date.now();
   try {
     const res = await openai.embeddings.create({ model: EMBED_MODEL, input: texts.map((t) => t.slice(0, 8000)), dimensions: EMBED_DIMS });
@@ -40,7 +50,7 @@ export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
 }
 
 async function embedUncached(text: string): Promise<number[]> {
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const openai = embeddingClient();
   const t0 = Date.now();
   // Logged here, inside the cache's compute step, so a cache hit writes no cost row.
   try {

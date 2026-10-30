@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { Request } from 'express';
+import { TIMEOUTS } from '../lib/timeouts.js';
 
 // Lazy singleton — avoids throwing at import time when env vars aren't set
 // yet (e.g. Glama's sandbox boot/ping check, which starts the process with
@@ -37,6 +38,8 @@ async function validateJWT(token: string): Promise<AuthContext | null> {
   try {
     const resp = await fetch(`${supabaseUrl.replace(/\/$/, '')}/auth/v1/user`, {
       headers: { apikey: apiKey, Authorization: `Bearer ${token}` },
+      // A hung GoTrue call used to stall every MCP request with it (F4/F6); a timeout fails like a network error.
+      signal: AbortSignal.timeout(TIMEOUTS.supabaseAuthUserMs),
     });
     if (!resp.ok) {
       console.warn(`[auth] jwt rejected by Supabase — status ${resp.status}`);
@@ -68,6 +71,7 @@ async function validateApiKey(apiKey: string): Promise<AuthContext | null> {
       .select('user_id')
       .eq('key_hash', hash)
       .eq('is_active', true)
+      .abortSignal(AbortSignal.timeout(TIMEOUTS.apiKeyLookupMs))
       .single();
     if (!data?.user_id) return null;
     // Fire-and-forget last_used update
