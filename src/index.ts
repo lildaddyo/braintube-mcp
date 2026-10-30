@@ -27,6 +27,7 @@ import { validateMcpOrigin } from './security/origin.js';
 import { resolveUserRole } from './security/tool-access.js';
 import { SessionStore, envInt } from './lib/session-store.js';
 import { createInFlightTracker, createGracefulShutdown } from './lib/shutdown.js';
+import { asyncHandler, jsonErrorHandler, installProcessHandlers, sendInternalError } from './lib/async-handler.js';
 import type { AuthContext } from './types.js';
 
 // Resolve package.json relative to this file so /health reports the actual
@@ -37,6 +38,9 @@ const __dirname = dirname(__filename);
 const pkg = JSON.parse(
   readFileSync(join(__dirname, '..', 'package.json'), 'utf8'),
 ) as { version: string };
+
+// A stray rejected promise is logged instead of terminating the process (F7).
+installProcessHandlers();
 
 const app = express();
 // Counts requests in flight for the graceful shutdown. GET /mcp is a long-lived SSE stream, so it is
@@ -107,7 +111,14 @@ async function requireAuth(
   res: express.Response,
   next: express.NextFunction
 ) {
-  const auth = await getAuthContext(req);
+  let auth: AuthContext | null;
+  try {
+    auth = await getAuthContext(req);
+  } catch (err) {
+    // getAuthContext fails closed on its own; this only catches the unexpected, so it never escapes as a rejection.
+    sendInternalError('auth', res, err, req.path.startsWith('/mcp') || req.baseUrl === '/mcp' ? 'jsonrpc' : 'json');
+    return;
+  }
   if (!auth) {
     res.set(
       'WWW-Authenticate',
@@ -211,7 +222,7 @@ setInterval(() => {
 // Origin validation (DNS-rebinding guard) runs before auth on every /mcp method.
 app.use('/mcp', validateMcpOrigin);
 
-app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
+app.post('/mcp', requireAuth, mcpRateLimit, asyncHandler('mcp', async (req, res) => {
   const auth = (req as express.Request & { auth: AuthContext }).auth;
 
   // Re-use an existing session if the client provides Mcp-Session-Id.
@@ -253,9 +264,9 @@ app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
   const server = await createMcpServer(auth);
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
-});
+}, 'jsonrpc'));
 
-app.get('/mcp', mcpBrowserLanding, requireAuth, mcpRateLimit, async (req, res) => {
+app.get('/mcp', mcpBrowserLanding, requireAuth, mcpRateLimit, asyncHandler('mcp', async (req, res) => {
   // GET is used by clients that open a persistent SSE stream for server→client pushes.
   const auth = (req as express.Request & { auth: AuthContext }).auth;
   const incomingSessionId = req.headers['mcp-session-id'] as string | undefined;
@@ -269,7 +280,7 @@ app.get('/mcp', mcpBrowserLanding, requireAuth, mcpRateLimit, async (req, res) =
     }
   }
   res.status(400).json({ error: 'Mcp-Session-Id header required for SSE stream.' });
-});
+}, 'jsonrpc'));
 
 // ─── Personal MCP URL info ────────────────────────────────────────────────────
 // Called by BrainTube dashboard to show the user their MCP URL + setup instructions
@@ -364,7 +375,7 @@ app.post('/api/extension-ingest', requireAuth, mcpRateLimit, extensionCaptureDai
 // POST /api/backfill — triggers backfillEmbeddings for the authenticated user.
 // Returns { embedded, errors, firstError? } when done.
 // Use this when backfill_embeddings is beyond the 15-tool cap in claude.ai.
-app.post('/api/backfill', requireAuth, async (req, res) => {
+app.post('/api/backfill', requireAuth, asyncHandler('backfill', async (req, res) => {
   const auth = (req as express.Request & { auth: AuthContext }).auth;
   // Same tier as the backfill_embeddings MCP tool (admin): this route used to let any signed-in
   // account run paid embeddings with an unbounded batch size (BTMCP-07).
@@ -384,12 +395,15 @@ app.post('/api/backfill', requireAuth, async (req, res) => {
     console.error('[backfill] error:', msg);
     res.status(500).json({ ok: false, error: msg });
   }
-});
+}));
 
 // ─── Obsidian sync REST endpoint ─────────────────────────────────────────────
 // Auth: Bearer bt_<key> (API key, not JWT)
 // Body: { notes: [{ path, title, content, tags, modified_at }] }
 app.post('/api/obsidian-sync', handleObsidianSync);
+
+// Last in the chain: an error passed to next() gets a JSON answer instead of Express's HTML page.
+app.use(jsonErrorHandler);
 
 // ─── Stdio transport (Glama quality-test harness runs `mcp-proxy -- node dist/index.js` and
 // speaks MCP over stdin/stdout, not HTTP) ──────────────────────────────────────────────────
