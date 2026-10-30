@@ -25,6 +25,7 @@ import { summaryCache, hashKey, cacheStats } from './lib/ttl-cache.js';
 import { backfillEmbeddings } from './tools/embedding.js';
 import { validateMcpOrigin } from './security/origin.js';
 import { resolveUserRole } from './security/tool-access.js';
+import { SessionStore, envInt } from './lib/session-store.js';
 import type { AuthContext } from './types.js';
 
 // Resolve package.json relative to this file so /health reports the actual
@@ -169,27 +170,36 @@ app.use('/api/session-ingest', sessionIngestRouter);
 // returns [] because the MCP state machine rejects calls before initialize.
 // Each entry remembers the user that initialized it: the server behind it was built with
 // that user's auth and role, so a request from anyone else must never reach it (BTMCP-05).
-interface McpSessionEntry {
-  transport: StreamableHTTPServerTransport;
-  userId: string;
-}
-const mcpSessions = new Map<string, McpSessionEntry>();
-
-/** The live transport for this session id, only if `userId` is the user who created it. */
-function ownedSession(sessionId: string, userId: string): StreamableHTTPServerTransport | undefined {
-  const entry = mcpSessions.get(sessionId);
-  return entry && entry.userId === userId ? entry.transport : undefined;
-}
+// Idle sessions are evicted after MCP_SESSION_IDLE_MS (default 30 min) by a sweep every minute, and
+// MCP_MAX_SESSIONS (default 1000) caps the store by evicting the least recently used session.
+// This replaced an hourly mcpSessions.clear() that dropped every live session at once (F1).
+const SESSION_IDLE_MS = envInt('MCP_SESSION_IDLE_MS', 30 * 60 * 1000);
+const MAX_SESSIONS = envInt('MCP_MAX_SESSIONS', 1000);
+const SESSION_SWEEP_MS = 60 * 1000;
 
 /** Session ids act as bearer handles for a live session; log only a short prefix. */
 const shortId = (sessionId: string): string => sessionId.slice(0, 8);
 
-// Prune the session store hourly to avoid unbounded memory growth on Railway.
+const mcpSessions = new SessionStore<StreamableHTTPServerTransport>({
+  idleMs: SESSION_IDLE_MS,
+  maxSessions: MAX_SESSIONS,
+  onEvict: (sessionId, transport, reason) => {
+    // close() ends an open SSE stream too; before, a dropped transport stayed alive through its response.
+    transport.close().catch((err: unknown) =>
+      console.error(`[mcp] transport close failed (${shortId(sessionId)}…):`, err instanceof Error ? err.message : String(err)));
+    if (reason !== 'shutdown') console.error(`[mcp] session evicted (${shortId(sessionId)}…, ${reason}) — ${mcpSessions.size} active`);
+  },
+});
+
+/** The live transport for this session id, only if `userId` is the user who created it. */
+function ownedSession(sessionId: string, userId: string): StreamableHTTPServerTransport | undefined {
+  return mcpSessions.get(sessionId, userId);
+}
+
 setInterval(() => {
-  const before = mcpSessions.size;
-  mcpSessions.clear();
-  if (before > 0) console.error(`[mcp] session store pruned (${before} sessions evicted)`);
-}, 60 * 60 * 1000).unref();
+  const evicted = mcpSessions.sweep();
+  if (evicted > 0) console.error(`[mcp] idle sweep evicted ${evicted} session(s) — ${mcpSessions.size} active`);
+}, SESSION_SWEEP_MS).unref();
 
 // ─── MCP endpoints ────────────────────────────────────────────────────────────
 
@@ -205,6 +215,8 @@ app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
   if (incomingSessionId) {
     const existing = ownedSession(incomingSessionId, auth.userId);
     if (existing) {
+      // In flight until the response closes: the idle sweep never evicts a session mid-call.
+      res.once('close', mcpSessions.begin(incomingSessionId));
       await existing.handleRequest(req, res, req.body);
       return;
     }
@@ -221,7 +233,7 @@ app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (sessionId) => {
-      mcpSessions.set(sessionId, { transport, userId: auth.userId });
+      mcpSessions.set(sessionId, transport, auth.userId);
       console.error(`[mcp] session created (${shortId(sessionId)}…) — ${mcpSessions.size} active`);
     },
   });
@@ -245,6 +257,8 @@ app.get('/mcp', mcpBrowserLanding, requireAuth, mcpRateLimit, async (req, res) =
   if (incomingSessionId) {
     const existing = ownedSession(incomingSessionId, auth.userId);
     if (existing) {
+      // An open SSE stream keeps the session live until the client disconnects.
+      res.once('close', mcpSessions.begin(incomingSessionId));
       await existing.handleRequest(req, res);
       return;
     }
