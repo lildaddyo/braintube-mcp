@@ -28,6 +28,8 @@ export default defineRailway(() => {
       restartPolicyMaxRetries: 3,
       // SIGTERM -> SIGKILL window; the server drains in-flight requests for up to 25 s (src/lib/shutdown.ts).
       drainingSeconds: 30,
+      // Keep the old container serving until the new one passes /health, so a deploy has no gap.
+      overlapSeconds: 20,
     },
     replicas: { "us-east4-eqdc4a": 1 },
     domains: ["mcp.brain-tube.com"],
