@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "@notionhq/client": "^5.27.0",
+    "@notionhq/client": "^5.28.0",
     "@supabase/supabase-js": "^2.117.3",
     "express": "^4.22.2",
     "express-rate-limit": "^8.7.1",
