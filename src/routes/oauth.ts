@@ -390,10 +390,12 @@ oauthRouter.post('/oauth/authorize', loginIpLimit, loginEmailLimit, async (req: 
 });
 
 // ─── Google sign-in — start ──────────────────────────────────────────────────
-// Reached by clicking "Continue with Google" in the login form. We confirm the
-// Claude OAuth flow is still pending (peek, don't consume), generate a Supabase
-// PKCE verifier, drop a short-lived cookie tying the browser to that verifier,
-// and redirect the user to Supabase's Google authorize endpoint.
+// Reached by clicking "Continue with Google" (or "with Apple", ?provider=apple) in
+// the login form. We confirm the Claude OAuth flow is still pending (peek, don't
+// consume), generate a Supabase PKCE verifier, drop a short-lived cookie tying the
+// browser to that verifier, and redirect the user to Supabase's authorize endpoint
+// for that provider. Both providers come back through /oauth/google/callback, the
+// redirect URL Supabase already allows.
 
 oauthRouter.get('/oauth/google/start', (req: Request, res: Response) => {
   const claudeState = String(req.query.state ?? '');
@@ -427,7 +429,7 @@ oauthRouter.get('/oauth/google/start', (req: Request, res: Response) => {
   });
 
   const url = new URL(`${supabaseUrl}/auth/v1/authorize`);
-  url.searchParams.set('provider', 'google');
+  url.searchParams.set('provider', req.query.provider === 'apple' ? 'apple' : 'google');
   url.searchParams.set('redirect_to', `${baseUrl(req)}/oauth/google/callback`);
   url.searchParams.set('code_challenge', supabaseChallenge);
   url.searchParams.set('code_challenge_method', 's256');
@@ -443,7 +445,7 @@ oauthRouter.get('/oauth/google/callback', async (req: Request, res: Response) =>
   const code = String(req.query.code ?? '');
   const errorParam = String(req.query.error_description ?? req.query.error ?? '');
   if (errorParam) {
-    res.status(400).send(errorPage(`Google sign-in failed: ${errorParam}`));
+    res.status(400).send(errorPage(`Sign-in failed: ${errorParam}`));
     return;
   }
   if (!code) {
@@ -492,14 +494,14 @@ oauthRouter.get('/oauth/google/callback', async (req: Request, res: Response) =>
 
     if (!tokenResp.ok) {
       console.error('[oauth/google/callback] Supabase token exchange failed — status', tokenResp.status);
-      res.status(400).send(errorPage('Could not complete Google sign-in.'));
+      res.status(400).send(errorPage('Could not complete the sign-in.'));
       return;
     }
 
     tokenJson = await tokenResp.json();
   } catch (err) {
     console.error('[oauth/google/callback] token exchange error:', err);
-    res.status(500).send(errorPage('A server error occurred during Google sign-in.'));
+    res.status(500).send(errorPage('A server error occurred during sign-in.'));
     return;
   }
 
@@ -809,6 +811,8 @@ ${BRAND_HEAD}
   .google-btn:hover { background:#f6f6f8; }
   .google-btn:active { transform:translateY(1px); }
   .google-btn svg { width:18px; height:18px; flex-shrink:0; }
+  .apple-btn { margin-top:10px; background:#000; color:#fff; border-color:#000; }
+  .apple-btn:hover { background:#1c1c1e; }
   .divider { display:flex; align-items:center; gap:14px; margin:22px 0; font-family:var(--sans); font-size:10px;
     font-weight:500; letter-spacing:3px; text-transform:uppercase; color:var(--faint); }
   .divider::before,.divider::after { content:''; flex:1; height:1px; background:var(--rule); }
@@ -845,6 +849,12 @@ ${BRAND_HEAD}
       <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
     </svg>
     Continue with Google
+  </a>
+  <a href="/oauth/google/start?state=${esc(state)}&amp;provider=apple" class="google-btn apple-btn">
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path fill="currentColor" d="M16.37 12.6c-.02-2.2 1.8-3.26 1.88-3.31-1.03-1.5-2.62-1.7-3.18-1.73-1.35-.14-2.64.8-3.33.8-.69 0-1.74-.78-2.87-.76-1.47.02-2.83.86-3.59 2.17-1.53 2.66-.39 6.6 1.1 8.76.73 1.06 1.6 2.24 2.73 2.2 1.1-.04 1.51-.71 2.84-.71 1.32 0 1.7.71 2.86.69 1.18-.02 1.93-1.07 2.65-2.13.84-1.22 1.18-2.41 1.2-2.47-.03-.01-2.3-.88-2.29-3.5zM14.2 6.13c.6-.73 1.01-1.75.9-2.76-.87.04-1.92.58-2.54 1.31-.56.65-1.05 1.68-.92 2.67.97.08 1.96-.49 2.56-1.22z"/>
+    </svg>
+    Continue with Apple
   </a>
   <div class="divider">or</div>
   <form method="post" action="/oauth/authorize">
