@@ -21,19 +21,23 @@ const EXACT_REDIRECT_URIS = new Set([
   'https://vertexaisearch.cloud.google.com/oauth-redirect',
   // Antigravity CLI when a client is pre-registered instead of DCR.
   'https://antigravity.google/oauth-callback',
+  // Cursor: dynamic registration sends its web callback (desktop authorization
+  // itself then uses a loopback port); cloud agents fall back to the app scheme.
+  // forum.cursor.com/t/171867 and /t/167935
+  'https://www.cursor.com/agents/mcp/oauth/callback',
+  'cursor://anysphere.cursor-mcp/oauth/callback',
 ]);
 
 // TODO: confirm exact callback paths for these and move them into
 // EXACT_REDIRECT_URIS — left as path-wildcards for now because guessing wrong
-// would break live integrations. cursor.sh is also worth re-checking: Cursor's
-// current product domain is cursor.com, not cursor.sh.
+// would break live integrations. *.windsurf.dev was removed on 2026-10-30: the
+// domain is not on Windsurf/Codeium's DNS and no Windsurf callback uses it.
 const REDIRECT_URI_GLOB_ALLOWLIST = [
   'https://*.claude.ai/**',
   'https://*.anthropic.com/**',
   'https://cursor.sh/**',
   'https://*.cursor.sh/**',
   'https://codeium.com/**',
-  'https://*.windsurf.dev/**',
   // ChatGPT without issuer identification: one callback per connection,
   // https://chatgpt.com/connector/oauth/{callback_id}. Single segment only.
   'https://chatgpt.com/connector/oauth/*',
@@ -74,9 +78,10 @@ export function normalizeRedirectUri(uri: string): string | null {
   // RFC 8252 §7.3 — native/CLI clients bind an ephemeral loopback port; port
   // and path are intentionally unconstrained.
   const loopback = u.protocol === 'http:' && LOOPBACK_HOSTS.has(u.hostname);
-  if (u.protocol !== 'https:' && !loopback) return null;
-
   const normalized = `${u.protocol}//${u.host}${u.pathname}`;
+  // A custom app scheme is accepted only as an exact entry, never by glob.
+  if (u.protocol !== 'https:' && !loopback) return EXACT_REDIRECT_URIS.has(normalized) ? normalized : null;
+
   if (loopback || EXACT_REDIRECT_URIS.has(normalized) || allowlistRegexes.some((re) => re.test(normalized))) {
     return normalized;
   }

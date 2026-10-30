@@ -33,7 +33,8 @@ const ACCEPTED_CALLBACKS = [
   'https://cursor.sh/a',
   'https://x.cursor.sh/a',
   'https://codeium.com/a',
-  'https://x.windsurf.dev/a',
+  'https://www.cursor.com/agents/mcp/oauth/callback',
+  'cursor://anysphere.cursor-mcp/oauth/callback',
   'http://localhost:3000/cb',
   'http://localhost/cb',
   'http://127.0.0.1:8080/a/b',
@@ -105,6 +106,23 @@ test('rejects sibling domain that just contains claude.ai', () => {
 
 test('accepts localhost with port and path', () => {
   assert.equal(isRedirectUriAllowed('http://localhost:3000/cb'), true);
+});
+
+test('rejects windsurf.dev subdomains (removed 2026-10-30)', () => {
+  assert.equal(isRedirectUriAllowed('https://x.windsurf.dev/a'), false);
+});
+
+test('accepts a custom app scheme only as an exact entry', () => {
+  assert.equal(isRedirectUriAllowed('cursor://anysphere.cursor-mcp/oauth/callback'), true);
+  for (const uri of [
+    'cursor://anysphere.cursor-mcp/oauth/other',
+    'cursor://evil/oauth/callback',
+    'cursor://anysphere.cursor-mcp/oauth/callback?x=1',
+    'javascript://anysphere.cursor-mcp/oauth/callback',
+    'https://www.cursor.com/agents/mcp/oauth/callback/x',
+  ]) {
+    assert.equal(isRedirectUriAllowed(uri), false, show(uri));
+  }
 });
 
 test('rejects http on non-loopback host', () => {
