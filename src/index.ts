@@ -17,7 +17,7 @@ import { mcpBrowserLanding } from './routes/browser-landing.js';
 import { serverCardRouter } from './routes/server-card.js';
 import { glamaRouter } from './routes/glama.js';
 import { restRouter } from './routes/rest.js';
-import { sessionIngestBodyParser, sessionIngestRouter } from './routes/session-ingest.js';
+import { sessionIngestBodyParser, sessionIngestRouter, sessionIngestIdle } from './routes/session-ingest.js';
 import { buildOpenApiSpec } from './routes/openapi.js';
 import { ingestContent, DailyIngestLimitError } from './tools/ingest.js';
 import { summariseConversation } from './tools/summarise.js';
@@ -25,6 +25,9 @@ import { summaryCache, hashKey, cacheStats } from './lib/ttl-cache.js';
 import { backfillEmbeddings } from './tools/embedding.js';
 import { validateMcpOrigin } from './security/origin.js';
 import { resolveUserRole } from './security/tool-access.js';
+import { SessionStore, envInt } from './lib/session-store.js';
+import { createInFlightTracker, createGracefulShutdown } from './lib/shutdown.js';
+import { asyncHandler, jsonErrorHandler, installProcessHandlers, sendInternalError } from './lib/async-handler.js';
 import type { AuthContext } from './types.js';
 
 // Resolve package.json relative to this file so /health reports the actual
@@ -36,7 +39,14 @@ const pkg = JSON.parse(
   readFileSync(join(__dirname, '..', 'package.json'), 'utf8'),
 ) as { version: string };
 
+// A stray rejected promise is logged instead of terminating the process (F7).
+installProcessHandlers();
+
 const app = express();
+// Counts requests in flight for the graceful shutdown. GET /mcp is a long-lived SSE stream, so it is
+// not waited for; those streams are ended by closing the MCP transports at the end of the drain.
+const inFlight = createInFlightTracker((req) => req.method === 'GET' && req.path === '/mcp');
+app.use(inFlight.middleware);
 app.use(helmet());
 // POST /api/session-ingest takes up to 5 MB of JSON, so it gets its own parser AHEAD of the 100 kb global
 // one below. requireAuth runs first: an unauthenticated caller must never be able to make us buffer 5 MB.
@@ -101,7 +111,14 @@ async function requireAuth(
   res: express.Response,
   next: express.NextFunction
 ) {
-  const auth = await getAuthContext(req);
+  let auth: AuthContext | null;
+  try {
+    auth = await getAuthContext(req);
+  } catch (err) {
+    // getAuthContext fails closed on its own; this only catches the unexpected, so it never escapes as a rejection.
+    sendInternalError('auth', res, err, req.path.startsWith('/mcp') || req.baseUrl === '/mcp' ? 'jsonrpc' : 'json');
+    return;
+  }
   if (!auth) {
     res.set(
       'WWW-Authenticate',
@@ -169,34 +186,43 @@ app.use('/api/session-ingest', sessionIngestRouter);
 // returns [] because the MCP state machine rejects calls before initialize.
 // Each entry remembers the user that initialized it: the server behind it was built with
 // that user's auth and role, so a request from anyone else must never reach it (BTMCP-05).
-interface McpSessionEntry {
-  transport: StreamableHTTPServerTransport;
-  userId: string;
-}
-const mcpSessions = new Map<string, McpSessionEntry>();
-
-/** The live transport for this session id, only if `userId` is the user who created it. */
-function ownedSession(sessionId: string, userId: string): StreamableHTTPServerTransport | undefined {
-  const entry = mcpSessions.get(sessionId);
-  return entry && entry.userId === userId ? entry.transport : undefined;
-}
+// Idle sessions are evicted after MCP_SESSION_IDLE_MS (default 30 min) by a sweep every minute, and
+// MCP_MAX_SESSIONS (default 1000) caps the store by evicting the least recently used session.
+// This replaced an hourly mcpSessions.clear() that dropped every live session at once (F1).
+const SESSION_IDLE_MS = envInt('MCP_SESSION_IDLE_MS', 30 * 60 * 1000);
+const MAX_SESSIONS = envInt('MCP_MAX_SESSIONS', 1000);
+const SESSION_SWEEP_MS = 60 * 1000;
 
 /** Session ids act as bearer handles for a live session; log only a short prefix. */
 const shortId = (sessionId: string): string => sessionId.slice(0, 8);
 
-// Prune the session store hourly to avoid unbounded memory growth on Railway.
+const mcpSessions = new SessionStore<StreamableHTTPServerTransport>({
+  idleMs: SESSION_IDLE_MS,
+  maxSessions: MAX_SESSIONS,
+  onEvict: (sessionId, transport, reason) => {
+    // close() ends an open SSE stream too; before, a dropped transport stayed alive through its response.
+    transport.close().catch((err: unknown) =>
+      console.error(`[mcp] transport close failed (${shortId(sessionId)}…):`, err instanceof Error ? err.message : String(err)));
+    if (reason !== 'shutdown') console.error(`[mcp] session evicted (${shortId(sessionId)}…, ${reason}) — ${mcpSessions.size} active`);
+  },
+});
+
+/** The live transport for this session id, only if `userId` is the user who created it. */
+function ownedSession(sessionId: string, userId: string): StreamableHTTPServerTransport | undefined {
+  return mcpSessions.get(sessionId, userId);
+}
+
 setInterval(() => {
-  const before = mcpSessions.size;
-  mcpSessions.clear();
-  if (before > 0) console.error(`[mcp] session store pruned (${before} sessions evicted)`);
-}, 60 * 60 * 1000).unref();
+  const evicted = mcpSessions.sweep();
+  if (evicted > 0) console.error(`[mcp] idle sweep evicted ${evicted} session(s) — ${mcpSessions.size} active`);
+}, SESSION_SWEEP_MS).unref();
 
 // ─── MCP endpoints ────────────────────────────────────────────────────────────
 
 // Origin validation (DNS-rebinding guard) runs before auth on every /mcp method.
 app.use('/mcp', validateMcpOrigin);
 
-app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
+app.post('/mcp', requireAuth, mcpRateLimit, asyncHandler('mcp', async (req, res) => {
   const auth = (req as express.Request & { auth: AuthContext }).auth;
 
   // Re-use an existing session if the client provides Mcp-Session-Id.
@@ -205,6 +231,8 @@ app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
   if (incomingSessionId) {
     const existing = ownedSession(incomingSessionId, auth.userId);
     if (existing) {
+      // In flight until the response closes: the idle sweep never evicts a session mid-call.
+      res.once('close', mcpSessions.begin(incomingSessionId));
       await existing.handleRequest(req, res, req.body);
       return;
     }
@@ -221,7 +249,7 @@ app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (sessionId) => {
-      mcpSessions.set(sessionId, { transport, userId: auth.userId });
+      mcpSessions.set(sessionId, transport, auth.userId);
       console.error(`[mcp] session created (${shortId(sessionId)}…) — ${mcpSessions.size} active`);
     },
   });
@@ -236,21 +264,23 @@ app.post('/mcp', requireAuth, mcpRateLimit, async (req, res) => {
   const server = await createMcpServer(auth);
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
-});
+}, 'jsonrpc'));
 
-app.get('/mcp', mcpBrowserLanding, requireAuth, mcpRateLimit, async (req, res) => {
+app.get('/mcp', mcpBrowserLanding, requireAuth, mcpRateLimit, asyncHandler('mcp', async (req, res) => {
   // GET is used by clients that open a persistent SSE stream for server→client pushes.
   const auth = (req as express.Request & { auth: AuthContext }).auth;
   const incomingSessionId = req.headers['mcp-session-id'] as string | undefined;
   if (incomingSessionId) {
     const existing = ownedSession(incomingSessionId, auth.userId);
     if (existing) {
+      // An open SSE stream keeps the session live until the client disconnects.
+      res.once('close', mcpSessions.begin(incomingSessionId));
       await existing.handleRequest(req, res);
       return;
     }
   }
   res.status(400).json({ error: 'Mcp-Session-Id header required for SSE stream.' });
-});
+}, 'jsonrpc'));
 
 // ─── Personal MCP URL info ────────────────────────────────────────────────────
 // Called by BrainTube dashboard to show the user their MCP URL + setup instructions
@@ -345,7 +375,7 @@ app.post('/api/extension-ingest', requireAuth, mcpRateLimit, extensionCaptureDai
 // POST /api/backfill — triggers backfillEmbeddings for the authenticated user.
 // Returns { embedded, errors, firstError? } when done.
 // Use this when backfill_embeddings is beyond the 15-tool cap in claude.ai.
-app.post('/api/backfill', requireAuth, async (req, res) => {
+app.post('/api/backfill', requireAuth, asyncHandler('backfill', async (req, res) => {
   const auth = (req as express.Request & { auth: AuthContext }).auth;
   // Same tier as the backfill_embeddings MCP tool (admin): this route used to let any signed-in
   // account run paid embeddings with an unbounded batch size (BTMCP-07).
@@ -365,12 +395,15 @@ app.post('/api/backfill', requireAuth, async (req, res) => {
     console.error('[backfill] error:', msg);
     res.status(500).json({ ok: false, error: msg });
   }
-});
+}));
 
 // ─── Obsidian sync REST endpoint ─────────────────────────────────────────────
 // Auth: Bearer bt_<key> (API key, not JWT)
 // Body: { notes: [{ path, title, content, tags, modified_at }] }
 app.post('/api/obsidian-sync', handleObsidianSync);
+
+// Last in the chain: an error passed to next() gets a JSON answer instead of Express's HTML page.
+app.use(jsonErrorHandler);
 
 // ─── Stdio transport (Glama quality-test harness runs `mcp-proxy -- node dist/index.js` and
 // speaks MCP over stdin/stdout, not HTTP) ──────────────────────────────────────────────────
@@ -471,13 +504,33 @@ async function bootStdio(): Promise<void> {
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
+const httpServer = app.listen(PORT, '0.0.0.0', () => {
   console.error(`BrainTube MCP v3 running on port ${PORT}`);
   console.error(`Health:   http://localhost:${PORT}/health`);
   console.error(`MCP:      http://localhost:${PORT}/mcp`);
   console.error(`MCP URL:  http://localhost:${PORT}/mcp-url`);
   console.error(`Obsidian: http://localhost:${PORT}/api/obsidian-sync`);
 });
+
+// ─── Graceful shutdown ────────────────────────────────────────────────────────
+// Railway sends SIGTERM on every deploy. Stop accepting connections, let in-flight requests and the
+// session-ingest embedding jobs finish (up to SHUTDOWN_TIMEOUT_MS, default 25 s), then close every MCP
+// transport (ends SSE streams so clients reconnect to the new deploy) and exit.
+const SHUTDOWN_TIMEOUT_MS = envInt('SHUTDOWN_TIMEOUT_MS', 25_000);
+const shutdown = createGracefulShutdown({
+  server: httpServer,
+  timeoutMs: SHUTDOWN_TIMEOUT_MS,
+  onStart: () => inFlight.startDraining(),
+  drain: async () => {
+    await Promise.all([inFlight.idle(), sessionIngestIdle()]);
+  },
+  beforeExit: () => {
+    const closed = mcpSessions.closeAll();
+    if (closed > 0) console.error(`[shutdown] closed ${closed} MCP session(s)`);
+  },
+});
+process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
+process.once('SIGINT', () => { void shutdown('SIGINT'); });
 
 bootStdio().catch((err) => {
   console.error('[stdio] failed to start stdio transport (HTTP transport unaffected):', err instanceof Error ? err.message : String(err));

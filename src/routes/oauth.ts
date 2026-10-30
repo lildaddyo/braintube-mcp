@@ -35,6 +35,7 @@ import {
   refreshFailure,
   codeBindingMatches, isGoogleRelayRedirect } from '../auth/oauth-store.js';
 import { BRAND_LOGO_DATA_URI } from './brand-logo.js';
+import { TIMEOUTS } from '../lib/timeouts.js';
 
 export const oauthRouter = Router();
 
@@ -314,6 +315,7 @@ oauthRouter.post('/oauth/authorize', loginIpLimit, loginEmailLimit, async (req: 
   try {
     const resp = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
       method: 'POST',
+      signal: AbortSignal.timeout(TIMEOUTS.supabaseTokenMs),
       headers: {
         'Content-Type': 'application/json',
         'apikey': anonKey,
@@ -477,6 +479,7 @@ oauthRouter.get('/oauth/google/callback', async (req: Request, res: Response) =>
   try {
     const tokenResp = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=pkce`, {
       method: 'POST',
+      signal: AbortSignal.timeout(TIMEOUTS.supabaseTokenMs),
       headers: {
         'Content-Type': 'application/json',
         apikey: anonKey,
@@ -604,6 +607,7 @@ oauthRouter.post('/oauth/token', refreshIpLimit, async (req: Request, res: Respo
     try {
       const resp = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
         method: 'POST',
+        signal: AbortSignal.timeout(TIMEOUTS.supabaseTokenMs),
         headers: {
           'Content-Type': 'application/json',
           'apikey': anonKey,

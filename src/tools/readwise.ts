@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { edgeAuthHeaders } from '../lib/edge-auth.js';
+import { TIMEOUTS } from '../lib/timeouts.js';
 
 const READWISE_SYNC_URL =
   'https://iqjnmmtvhyavgrsxpoao.supabase.co/functions/v1/readwise-sync';
@@ -23,6 +24,7 @@ export async function connectReadwise(
     method: 'POST',
     headers: edgeAuthHeaders(userId, userJwt),
     body: JSON.stringify({ action: 'connect', access_token: input.access_token }),
+    signal: AbortSignal.timeout(TIMEOUTS.readwiseConnectMs),
   });
 
   const data = await res.json().catch(() => ({ error: 'Invalid JSON response' }));
@@ -53,6 +55,7 @@ export async function syncReadwise(
     method: 'POST',
     headers: edgeAuthHeaders(userId, userJwt),
     body: JSON.stringify({ action: 'sync', mode: input.mode }),
+    signal: AbortSignal.timeout(TIMEOUTS.readwiseSyncMs),
   });
 
   const data = await res.json().catch(() => ({ error: 'Invalid JSON response' }));

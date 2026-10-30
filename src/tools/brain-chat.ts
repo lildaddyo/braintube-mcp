@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import { dbAdmin, logMcpRetrieval } from '../db/supabase.js';
 import { actingUserHeaders } from '../lib/edge-auth.js';
+import { TIMEOUTS } from '../lib/timeouts.js';
 
 // ── chat_with_brain ───────────────────────────────────────────────────────────
 
@@ -89,7 +90,8 @@ export async function chatWithBrain(
       chat_history: input.chat_history ?? [],
       session_id:   input.session_id,
     }),
-    signal: AbortSignal.timeout(30_000),
+    // Covers the whole answer, body included. 60 s (was 30 s) keeps a slow but healthy answer (p95 ~17 s).
+    signal: AbortSignal.timeout(TIMEOUTS.brainChatMs),
   });
 
   if (!res.ok) {
