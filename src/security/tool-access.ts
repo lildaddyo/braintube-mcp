@@ -37,7 +37,9 @@ export function tierGrantsAccess(userRole: UserRole, requiredTier: ToolTier): bo
 }
 
 // ─── Tool access map ──────────────────────────────────────────────────────────
-// Every registered tool should be listed. Any tool NOT listed here defaults to 'authenticated'.
+// Every registered tool must be listed (src/security/tool-access.test.ts fails CI
+// otherwise). A tool NOT listed here requires 'admin': a new tool stays hidden
+// from users until someone decides who may call it (feature-guard abuse case 5b).
 
 export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   // ── Authenticated (safe read-only — available to every logged-in user) ─────
@@ -115,9 +117,29 @@ export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   firewall_rule_history:          'admin',
 };
 
-/** Return the required tier for a tool.  Defaults to 'authenticated' for unknown tools. */
+/** Return the required tier for a tool.  Fails closed: unknown tools require 'admin'. */
 export function getRequiredTier(toolName: string): ToolTier {
-  return TOOL_ACCESS_MAP[toolName] ?? 'authenticated';
+  return TOOL_ACCESS_MAP[toolName] ?? 'admin';
+}
+
+// ─── Feature tags ─────────────────────────────────────────────────────────────
+// The product feature a tool belongs to. Keys match supabase/features.json in
+// lildaddyo/dark-n-cozy (docs/investigations/feature-guard-protocol.md, L5).
+// A tool with no entry is core: it is never hidden by the feature filter
+// (src/security/feature-filter.ts). The graph tools (get_knowledge_graph,
+// find_path, detect_gaps) stay untagged: the graph feeds core retrieval and
+// features.json has no key for it.
+
+export const TOOL_FEATURES: Record<string, string> = {
+  chat_with_brain:      'brains',
+  list_brains:          'brains',
+  compile_knowledge:    'wiki',
+  get_concept_articles: 'wiki',
+};
+
+/** The feature key a tool belongs to, or undefined for core tools. */
+export function getToolFeature(toolName: string): string | undefined {
+  return TOOL_FEATURES[toolName];
 }
 
 // ─── Role resolver ────────────────────────────────────────────────────────────
