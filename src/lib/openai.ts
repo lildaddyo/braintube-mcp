@@ -71,14 +71,15 @@ async function embedUncached(text: string): Promise<number[]> {
 export const TRANSLATE_MODEL = 'gpt-6-luna';
 
 /**
- * gpt-6 models reject temperature 0 and max_tokens (400, so every search would silently lose its
- * translation); without reasoning_effort 'none' they spend ~60 reasoning tokens of the 120 cap.
+ * gpt-6 models reject max_tokens, and temperature unless reasoning_effort is 'none' (a 400, so
+ * every search would silently lose its translation); other efforts also spend ~60 reasoning tokens
+ * of the 120 cap. Temperature 0 keeps a query's translation stable across cache misses.
  * gpt-4* keeps the old shape so QUERY_TRANSLATE_MODEL can still roll back.
  */
 export function translationParams(model: string) {
   return model.startsWith('gpt-4')
     ? { temperature: 0, max_tokens: 120 }
-    : { max_completion_tokens: 120, reasoning_effort: 'none' as const };
+    : { temperature: 0, max_completion_tokens: 120, reasoning_effort: 'none' as const };
 }
 
 /**
