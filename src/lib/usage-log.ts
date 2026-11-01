@@ -17,6 +17,9 @@ export const PRICES_AS_OF = '2026-10-09';
 const PRICES: Record<string, { input: number; output: number }> = {
   'text-embedding-3-small': { input: 0.00002, output: 0 },
   'text-embedding-3-large': { input: 0.00013, output: 0 },
+  // Query translation since 2026-11-02; $0.10 / $0.50 per M (OpenAI model page, 2026-11-01).
+  'gpt-6-luna': { input: 0.0001, output: 0.0005 },
+  // Kept so a QUERY_TRANSLATE_MODEL rollback still logs cost (shut down 2027-01-14).
   'gpt-4o-mini': { input: 0.00015, output: 0.0006 },
 };
 

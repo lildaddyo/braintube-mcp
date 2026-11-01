@@ -2,7 +2,7 @@
  * In-process LRU cache with a TTL (cache scope R&D 2026-10-16).
  *
  * The Railway process is long-lived and agents repeat the same queries across sessions, so the paid calls on the
- * search path (OpenAI embeddings, gpt-4o-mini query translation, jev-rerank) are memoised here. Bounded by entry
+ * search path (OpenAI embeddings, gpt-6-luna query translation, jev-rerank) are memoised here. Bounded by entry
  * count; the least recently used entry is evicted first (Map insertion order, re-inserted on every hit).
  * Only successful values are stored: `getOrCompute` never caches a thrown error, and callers skip `undefined`.
  * Hit/miss counters are reported on /health via `cacheStats()`. Kill switch: QUERY_CACHE=off.

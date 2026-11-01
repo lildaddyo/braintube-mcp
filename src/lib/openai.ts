@@ -64,13 +64,31 @@ async function embedUncached(text: string): Promise<number[]> {
 }
 
 /**
+ * Query translation model (2026-11-02, was gpt-4o-mini, which OpenAI shuts down 2027-01-14).
+ * Timed on 20 real Korean queries x 3: p50 865 ms, max 1.15 s against the 4 s budget (4o-mini 621 / 938 ms),
+ * translations equal or better, and cheaper ($0.10 / $0.50 per M).
+ */
+export const TRANSLATE_MODEL = 'gpt-6-luna';
+
+/**
+ * gpt-6 models reject temperature 0 and max_tokens (400, so every search would silently lose its
+ * translation); without reasoning_effort 'none' they spend ~60 reasoning tokens of the 120 cap.
+ * gpt-4* keeps the old shape so QUERY_TRANSLATE_MODEL can still roll back.
+ */
+export function translationParams(model: string) {
+  return model.startsWith('gpt-4')
+    ? { temperature: 0, max_tokens: 120 }
+    : { max_completion_tokens: 120, reasoning_effort: 'none' as const };
+}
+
+/**
  * Translate a non-English search query to English for cross-lingual retrieval.
  * Items are embedded/indexed mostly in English and full-text uses the 'english'
  * config, so a Cyrillic query gets zero keyword hits and a weaker semantic match.
  * Returns null on any failure — callers must fall back to the original query.
  */
 export async function translateQueryToEnglish(text: string): Promise<string | null> {
-  const model = process.env.QUERY_TRANSLATE_MODEL ?? 'gpt-4o-mini';
+  const model = process.env.QUERY_TRANSLATE_MODEL ?? TRANSLATE_MODEL;
   // null (failure) is never stored, so a transient OpenAI error is retried on the next search.
   return translationCache.getOrCompute(hashKey(model, normaliseQuery(text)), () => translateUncached(text, model));
 }
@@ -81,8 +99,7 @@ async function translateUncached(text: string, model: string): Promise<string | 
     const t0 = Date.now();
     const res = await openai.chat.completions.create({
       model,
-      temperature: 0,
-      max_tokens: 120,
+      ...translationParams(model),
       messages: [
         { role: 'system', content: 'Translate the user\'s search query into English. Keep technical terms, names and English words unchanged. Output only the translated query, nothing else.' },
         { role: 'user', content: text.slice(0, 500) },
