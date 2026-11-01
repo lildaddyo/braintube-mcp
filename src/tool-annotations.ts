@@ -112,6 +112,12 @@ export const TOOL_ANNOTATIONS: Record<string, ToolAnnotationEntry> = {
   recompute_salience:       write('Recompute Salience Scores', true, true),
   compute_centrality:       write('Recompute Graph Centrality', true, true),
 
+  // ── Router (core profile, src/tool-profiles.ts) ───────────────────────────
+  // run_tool only dispatches read-only tools; chat_with_brain among them reads
+  // public Brains, hence open world.
+  braintube_find_tools:     read('Find More Tools'),
+  braintube_run_tool:       read('Run a Listed Tool', true),
+
   // ── Admin: security and firewall ──────────────────────────────────────────
   security_dashboard:         read('Security Dashboard'),
   firewall_status:            read('Firewall Status'),

@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createHash, randomBytes } from 'crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +63,15 @@ import {
   firewallRuleHistorySchema, firewallRuleHistory, firewallRuleHistoryOutputSchema,
 } from './tools/firewall-admin.js';
 import { connectReadwiseSchema, connectReadwise, connectReadwiseOutputSchema, syncReadwiseSchema, syncReadwise, syncReadwiseOutputSchema } from './tools/readwise.js';
+import {
+  findToolsSchema, findToolsOutputSchema, runToolSchema, runToolOutputSchema,
+  FIND_TOOLS_DESCRIPTION, RUN_TOOL_DESCRIPTION, inputJsonSchema, rankTools, formatIssues,
+} from './tools/router.js';
+import type { RoutableTool } from './tools/router.js';
+import { CORE_TOOLS, ROUTER_TOOLS, resolveProfile } from './tool-profiles.js';
+import type { ToolProfile } from './tool-profiles.js';
+import { RETRIEVAL_DESCRIPTIONS } from './tool-descriptions.js';
+import { TOOL_ANNOTATIONS } from './tool-annotations.js';
 import type { ShortCircuitStatus } from './security/tool-envelope.js';
 import { requireCredits, requireFairUse } from './lib/credits.js';
 import { dbAdmin } from './db/supabase.js';
@@ -94,14 +104,24 @@ const generateApiKeyOutputSchema = z.object({
   label: z.string().nullable(),
 });
 
+export interface McpServerOptions {
+  /** Profile the client asked for (`?tools=` / X-BrainTube-Tools); default by role. */
+  profile?: ToolProfile;
+}
+
 // Every tool call is scoped to the authenticated user
-export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
+export async function createMcpServer(auth: AuthContext, opts: McpServerOptions = {}): Promise<McpServer> {
   // ── Resolve user role ONCE per session ──────────────────────────────────────
   // Queried here so the result is available synchronously inside secureWrap
   // and the tool registration proxy without an extra DB round-trip per call.
   const userRole: UserRole = await resolveUserRole(auth.userId);
-  console.error(`[rbac] session for ${auth.userId} — role: ${userRole}`);
+  const profile = resolveProfile(userRole, opts.profile);
+  console.error(`[rbac] session for ${auth.userId} — role: ${userRole}, tools: ${profile}`);
+  return buildMcpServer(auth, userRole, profile);
+}
 
+/** createMcpServer() with the role already resolved (tests pass it directly). */
+export function buildMcpServer(auth: AuthContext, userRole: UserRole, profile: ToolProfile): McpServer {
   const server = new McpServer({
     name: 'braintube-mcp',
     version: pkg.version,
@@ -325,6 +345,12 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
    */
   const registeredToolMeta: ToolMeta[] = [];
 
+  // Core profile: tools outside CORE_TOOLS are not registered. Read-only ones
+  // are kept here for braintube_run_tool; the rest are listed as full-only.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const routable = new Map<string, RoutableTool & { handler: (input: any) => unknown }>();
+  const fullOnly: string[] = [];
+
   const _origRegister = server.registerTool.bind(server);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (server as any).registerTool = (name: string, def: any, handler: (input: any) => unknown) => {
@@ -395,6 +421,22 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     // themselves isError:true instead, so they never need to conform (see
     // shortCircuitResult() above and src/security/tool-envelope.ts for why).
 
+    // ── Profile filter (src/tool-profiles.ts) ────────────────────────────────
+    if (profile === 'core' && !CORE_TOOLS.has(name) && !ROUTER_TOOLS.has(name)) {
+      if (TOOL_ANNOTATIONS[name]?.readOnlyHint === true) {
+        routable.set(name, {
+          name,
+          title: securedDef.title ?? name,
+          description: securedDef.description ?? '',
+          inputSchema: securedDef.inputSchema,
+          handler,
+        });
+      } else {
+        fullOnly.push(name);
+      }
+      return;
+    }
+
     // Track for startup audit
     registeredToolMeta.push({ name, description: securedDef.description ?? '' });
 
@@ -407,7 +449,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'search_knowledge',
     {
-      description: 'Full-text search over your personal BrainTube knowledge corpus. Searches across YouTube, Instagram, web, LinkedIn, GitHub, Twitter and more. Hybrid ranking (semantic + keyword, reciprocal-rank fusion); Non-Latin queries (Bulgarian, Korean, Japanese, ...) are also searched in English. Video results carry `moments`: the passages that match the query as { t (seconds), url (opens the video at that second), quote }. When you answer from a video, cite the moment url (timestamp link), not the plain video url. Returns taint warnings.',
+      description: RETRIEVAL_DESCRIPTIONS.search_knowledge,
       inputSchema: searchSchema,
       outputSchema: searchKnowledgeOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
@@ -433,7 +475,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'search',
     {
-      description: 'Search your saved BrainTube library (videos, articles, posts, notes). Returns matching item ids, titles and source URLs; video results also carry `moments` ({ t, url, quote }) whose url opens the video at the matching second. Cite those timestamp links when answering from a video. Pass an id to fetch for the full text.',
+      description: RETRIEVAL_DESCRIPTIONS.search,
       inputSchema: chatgptSearchSchema,
       outputSchema: chatgptSearchOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
@@ -493,7 +535,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'search_by_source',
     {
-      description: 'Search your corpus filtered to a specific source type. Use when you want results only from "youtube", "instagram", "web", "notion", "linkedin", "twitter", "github", "reddit", "pdf", "note", etc. Combines semantic + keyword fallback.',
+      description: RETRIEVAL_DESCRIPTIONS.search_by_source,
       inputSchema: searchBySourceSchema,
       outputSchema: searchBySourceOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
@@ -507,7 +549,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'search_by_date_range',
     {
-      description: 'Semantic search scoped to items saved between two dates. Pass ISO 8601 dates for "after" and "before". Useful for reviewing what you captured during a specific period or project.',
+      description: RETRIEVAL_DESCRIPTIONS.search_by_date_range,
       inputSchema: searchByDateSchema,
       outputSchema: searchByDateOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
@@ -813,7 +855,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'chat_with_brain',
     {
-      description: 'Ask a question to a BrainTube Brain (a curated knowledge base built from someone\'s corpus): any public Brain, or one of your own, including private and personal Brains listed by list_brains. Pass the brain_slug (visible in the Brain\'s URL), your question, and optionally prior chat_history for multi-turn conversations. Returns answer + source citations.',
+      description: RETRIEVAL_DESCRIPTIONS.chat_with_brain,
       inputSchema: chatWithBrainSchema,
       outputSchema: chatWithBrainOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: true }
@@ -980,7 +1022,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
   server.registerTool(
     'deep_search',
     {
-      description: 'Multi-hop knowledge search: runs adaptive_search then traverses the knowledge graph from the top-3 results up to max_hops deep, surfacing semantically connected items that a flat search would miss. Returns direct_results + graph_connected + total_nodes_explored.',
+      description: RETRIEVAL_DESCRIPTIONS.deep_search,
       inputSchema: deepSearchSchema,
       outputSchema: deepSearchOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
@@ -1127,7 +1169,85 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
     (input) => firewallRuleHistory(input)
   );
 
+  // ── Router tools (core profile only) ──────────────────────────────────────────
+  // Registered last, so `routable` already holds every read-only tool the
+  // user's role allows that the core profile left out (src/tool-profiles.ts).
+
+  if (profile === 'core') {
+    const fullHint = 'Reconnect with ?tools=full on the MCP URL (or the X-BrainTube-Tools: full header) to get every tool.';
+
+    server.registerTool(
+      'braintube_find_tools',
+      {
+        description: FIND_TOOLS_DESCRIPTION,
+        inputSchema: findToolsSchema,
+        outputSchema: findToolsOutputSchema,
+        annotations: { readOnlyHint: true, openWorldHint: false }
+      },
+      (input) => {
+        const { tools, matched } = rankTools([...routable.values()], input.query);
+        const out = {
+          tools: tools.map((t) => ({
+            name: t.name,
+            title: t.title,
+            description: t.description,
+            input_schema: inputJsonSchema(t.inputSchema),
+          })),
+          full_profile_only: [...fullOnly],
+          note: `${matched ? '' : `Nothing matched "${input.query}", so every extra tool is listed. `}Run one with braintube_run_tool { name, args }. Tools in full_profile_only change data and are not available here. ${fullHint}`,
+        };
+        const lines = out.tools.map((t) => `- ${t.name}: ${t.description}`);
+        return {
+          content: [{ type: 'text' as const, text: `${lines.join('\n')}\n\n${out.note}\n\n${JSON.stringify(out.tools.map((t) => ({ name: t.name, input_schema: t.input_schema })))}` }],
+          structuredContent: out as unknown as Record<string, unknown>,
+        };
+      }
+    );
+
+    server.registerTool(
+      'braintube_run_tool',
+      {
+        description: RUN_TOOL_DESCRIPTION,
+        inputSchema: runToolSchema,
+        outputSchema: runToolOutputSchema,
+        annotations: { readOnlyHint: true, openWorldHint: true }
+      },
+      async (input) => {
+        const fail = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
+        const entry = routable.get(input.name);
+        if (!entry) {
+          if (CORE_TOOLS.has(input.name) || ROUTER_TOOLS.has(input.name)) {
+            return fail(`\`${input.name}\` is already in your tool list: call it directly.`);
+          }
+          if (fullOnly.includes(input.name)) {
+            return fail(`\`${input.name}\` changes data, so it cannot run through braintube_run_tool. ${fullHint}`);
+          }
+          return fail(`No tool \`${input.name}\` is available to your account here. Call braintube_find_tools to see what you can run.`);
+        }
+        const parsed = entry.inputSchema.safeParse(input.args ?? {});
+        if (!parsed.success) {
+          return fail(
+            `Arguments do not match the input schema of \`${entry.name}\`:\n${formatIssues(parsed.error)}\n\n` +
+            `Expected schema:\n${JSON.stringify(inputJsonSchema(entry.inputSchema))}`
+          );
+        }
+        // Same wrapper as a direct call: role check, injection scan, audit log under the real name.
+        const result = await secureWrap(entry.name, entry.handler)(parsed.data as Record<string, unknown>) as CallToolResult;
+        if (result.isError) return result;
+        return {
+          content: result.content,
+          structuredContent: { tool: entry.name, result: result.structuredContent ?? null },
+        };
+      }
+    );
+  }
+
   // ── MCP Prompt: session_start ─────────────────────────────────────────────────
+
+  // get_session_brief is not in the core list; there it runs through the router.
+  const sessionBriefCall = routable.has('get_session_brief')
+    ? 'braintube_run_tool({ name: "get_session_brief" })'
+    : 'get_session_brief()';
 
   server.registerPrompt(
     'session_start',
@@ -1144,7 +1264,7 @@ export async function createMcpServer(auth: AuthContext): Promise<McpServer> {
             text: `You are connected to the user's personal BrainTube knowledge corpus via MCP tools.
 
 ON THE FIRST USER MESSAGE (not now, not on connection — wait for the user to speak first):
-1. Silently call get_session_brief() to load their context.
+1. Silently call ${sessionBriefCall} to load their context.
 2. Use the returned data to inform all your responses throughout this session:
    - expertise: their knowledge depth by topic — reference this when answering questions
    - recent_work: their last AI conversations — pick up threads naturally if relevant
@@ -1157,7 +1277,7 @@ DURING THE SESSION:
 - Reference recent conversations naturally ("you were working on X recently…") without being asked.
 - Never announce that you're loading context — just use it.
 
-Do not call get_session_brief() yet. Wait for the user's first message.`
+Do not call ${sessionBriefCall} yet. Wait for the user's first message.`
           }
         }
       ]

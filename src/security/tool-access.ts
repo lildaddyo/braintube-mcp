@@ -68,6 +68,9 @@ export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   retrieval_quality:      'authenticated',
   find_path:              'authenticated',
   get_edge_history:       'authenticated',
+  // Router tools: only reach tools the session's role already allows.
+  braintube_find_tools:   'authenticated',
+  braintube_run_tool:     'authenticated',
 
   // ── User write tools (every signed-in user; usage is metered by credits) ──
   // These were 'premium', but no account holds a premium role — user_roles

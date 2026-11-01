@@ -15,7 +15,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 process.env.SUPABASE_URL ??= 'http://localhost:59999';
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= 'test-service-role-key';
 
-const { TOOLS, PUBLIC_TOOLS } = await import('../routes/server-card.js');
+const { TOOLS, PUBLIC_TOOLS, FULL_PUBLIC_TOOLS } = await import('../routes/server-card.js');
 const { TOOL_ACCESS_MAP, getRequiredTier, tierGrantsAccess } = await import('./tool-access.js');
 const { createMcpServer } = await import('../server.js');
 
@@ -37,9 +37,9 @@ test('public server card lists no admin-tier tool', () => {
   }
 });
 
-test('public server card keeps every non-admin tool', () => {
+test('full card list keeps every non-admin tool', () => {
   const nonAdmin = TOOLS.filter((t) => getRequiredTier(t.name) !== 'admin').map((t) => t.name).sort();
-  assert.deepEqual(PUBLIC_TOOLS.map((t) => t.name).sort(), nonAdmin);
+  assert.deepEqual(FULL_PUBLIC_TOOLS.map((t) => t.name).sort(), nonAdmin);
 });
 
 test('the authenticated role is denied every admin-tier tool', () => {
@@ -50,7 +50,7 @@ test('the authenticated role is denied every admin-tier tool', () => {
 });
 
 test('a non-admin session gets no admin-tier tool from tools/list', async () => {
-  const server = await createMcpServer({ userId: '00000000-0000-0000-0000-000000000000', authMethod: 'apikey' });
+  const server = await createMcpServer({ userId: '00000000-0000-0000-0000-000000000000', authMethod: 'apikey' }, { profile: 'full' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'public-surface-test', version: '1.0.0' });
   await server.connect(serverTransport);
@@ -62,7 +62,7 @@ test('a non-admin session gets no admin-tier tool from tools/list', async () => 
     for (const name of adminTools) {
       assert.ok(!listed.has(name), `non-admin tools/list includes admin-tier tool "${name}"`);
     }
-    assert.ok(listed.has('bulk_ingest'), 'bulk_ingest should be available to every account (D-069)');
+    assert.ok(listed.has('bulk_ingest'), 'bulk_ingest should be available to every account with ?tools=full (D-069)');
   } finally {
     await client.close();
     await server.close();

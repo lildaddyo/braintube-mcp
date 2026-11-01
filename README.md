@@ -46,6 +46,8 @@ claude mcp add --transport http --scope user braintube https://mcp.brain-tube.co
 
 **ChatGPT** — Settings → Plugins → Add → Add custom MCP server. Paste `https://mcp.brain-tube.com/mcp`, choose OAuth, tick the risk box, Create, then Connect and sign in to BrainTube. No API key needed. ChatGPT uses the `search` and `fetch` tools and cites each answer back to your saved item.
 
+**Tool profiles** — by default a session gets 12 tools: the everyday search, read and save tools, plus `braintube_find_tools` and `braintube_run_tool`, which reach the other read-only tools on demand. To register every tool directly, add `?tools=full` to the endpoint (`https://mcp.brain-tube.com/mcp?tools=full`) or send the header `X-BrainTube-Tools: full`.
+
 Step-by-step setup for each client, plus how BrainTube compares with other MCP memory servers: [How to give Claude long-term memory with MCP](https://brain-tube.com/guide/give-your-ai-memory-mcp).
 
 ## Links
