@@ -29,6 +29,7 @@ import { SessionStore, envInt } from './lib/session-store.js';
 import { createInFlightTracker, createGracefulShutdown } from './lib/shutdown.js';
 import { asyncHandler, jsonErrorHandler, installProcessHandlers, sendInternalError } from './lib/async-handler.js';
 import type { AuthContext } from './types.js';
+import { requestedProfile } from './tool-profiles.js';
 
 // Resolve package.json relative to this file so /health reports the actual
 // shipped version. Built file lives at dist/index.js, source at src/index.ts —
@@ -68,7 +69,7 @@ app.use((req, res, next) => {
   ) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-BrainTube-Token');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-BrainTube-Token,X-BrainTube-Tools');
     res.setHeader('Access-Control-Max-Age', '86400');
   }
   if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
@@ -261,7 +262,8 @@ app.post('/mcp', requireAuth, mcpRateLimit, asyncHandler('mcp', async (req, res)
     }
   };
 
-  const server = await createMcpServer(auth);
+  // ?tools=full / X-BrainTube-Tools pick the tool profile for this session (src/tool-profiles.ts).
+  const server = await createMcpServer(auth, { profile: requestedProfile(req.query, req.headers) });
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 }, 'jsonrpc'));
@@ -494,7 +496,8 @@ async function bootStdio(): Promise<void> {
     console.error('[stdio] BRAINTUBE_API_KEY not set — initialize/tools-list available, tool calls will return an auth-required error');
   }
 
-  const server = await createMcpServer(auth);
+  // BRAINTUBE_TOOLS=full|core picks the stdio tool profile; default by role.
+  const server = await createMcpServer(auth, { profile: requestedProfile({ tools: process.env.BRAINTUBE_TOOLS }, undefined) });
   const transport = new GatedStdioTransport(authorized);
   transport.onerror = (err) => console.error('[stdio] transport error (non-fatal):', err.message);
   transport.onclose = () => console.error('[stdio] transport closed — HTTP transport unaffected');

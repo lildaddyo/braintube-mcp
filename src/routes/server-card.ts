@@ -68,6 +68,12 @@ import {
   firewallRuleHistorySchema, firewallRuleHistoryOutputSchema,
 } from '../tools/firewall-admin.js';
 import { directoryMetaFor } from '../tool-annotations.js';
+import { RETRIEVAL_DESCRIPTIONS } from '../tool-descriptions.js';
+import { CORE_TOOLS, ROUTER_TOOLS, FULL_PROFILE_QUERY, PROFILE_HEADER } from '../tool-profiles.js';
+import {
+  findToolsSchema, findToolsOutputSchema, runToolSchema, runToolOutputSchema,
+  FIND_TOOLS_DESCRIPTION, RUN_TOOL_DESCRIPTION,
+} from '../tools/router.js';
 import { getRequiredTier } from '../security/tool-access.js';
 import { connectReadwiseSchema, connectReadwiseOutputSchema, syncReadwiseSchema, syncReadwiseOutputSchema } from '../tools/readwise.js';
 import {
@@ -126,7 +132,7 @@ export interface ToolAnnotations {
 const CARD_TOOLS = [
   {
     name: 'search_knowledge',
-    description: 'Full-text search over your personal BrainTube knowledge corpus. Searches across YouTube, Instagram, web, LinkedIn, GitHub, Twitter and more. Hybrid ranking (semantic + keyword, reciprocal-rank fusion); Non-Latin queries (Bulgarian, Korean, Japanese, ...) are also searched in English. Video results carry `moments` ({ t, url, quote }): cite the moment url, which opens the video at the matching second.',
+    description: RETRIEVAL_DESCRIPTIONS.search_knowledge,
     inputSchema: toInputSchema(searchSchema),
     outputSchema: toOutputSchema(searchKnowledgeOutputSchema),
     annotations: { readOnlyHint: true, openWorldHint: false },
@@ -140,7 +146,7 @@ const CARD_TOOLS = [
   },
   {
     name: 'search',
-    description: 'Search your saved BrainTube library (videos, articles, posts, notes). Returns matching item ids, titles and source URLs; video results also carry `moments` ({ t, url, quote }) whose url opens the video at the matching second. Cite those timestamp links when answering from a video. Pass an id to fetch for the full text.',
+    description: RETRIEVAL_DESCRIPTIONS.search,
     inputSchema: toInputSchema(chatgptSearchSchema),
     outputSchema: toOutputSchema(chatgptSearchOutputSchema),
     annotations: { readOnlyHint: true, openWorldHint: false },
@@ -175,14 +181,14 @@ const CARD_TOOLS = [
   },
   {
     name: 'search_by_source',
-    description: 'Search your corpus filtered to a specific source type (youtube, web, notion, twitter, pdf, etc).',
+    description: RETRIEVAL_DESCRIPTIONS.search_by_source,
     inputSchema: toInputSchema(searchBySourceSchema),
     outputSchema: toOutputSchema(searchBySourceOutputSchema),
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
     name: 'search_by_date_range',
-    description: 'Semantic search scoped to items saved between two dates.',
+    description: RETRIEVAL_DESCRIPTIONS.search_by_date_range,
     inputSchema: toInputSchema(searchByDateSchema),
     outputSchema: toOutputSchema(searchByDateOutputSchema),
     annotations: { readOnlyHint: true, openWorldHint: false },
@@ -317,7 +323,7 @@ const CARD_TOOLS = [
   },
   {
     name: 'chat_with_brain',
-    description: 'Ask a question to a BrainTube Brain (curated knowledge base): any public Brain, or one of your own, including private and personal ones. Returns answer + source citations.',
+    description: RETRIEVAL_DESCRIPTIONS.chat_with_brain,
     inputSchema: toInputSchema(chatWithBrainSchema),
     outputSchema: toOutputSchema(chatWithBrainOutputSchema),
     annotations: { readOnlyHint: true, openWorldHint: true },
@@ -415,7 +421,7 @@ const CARD_TOOLS = [
   },
   {
     name: 'deep_search',
-    description: 'Multi-hop knowledge search: semantic search + graph traversal from top results.',
+    description: RETRIEVAL_DESCRIPTIONS.deep_search,
     inputSchema: toInputSchema(deepSearchSchema),
     outputSchema: toOutputSchema(deepSearchOutputSchema),
     annotations: { readOnlyHint: true, openWorldHint: false },
@@ -504,6 +510,20 @@ const CARD_TOOLS = [
     outputSchema: toOutputSchema(firewallRuleHistoryOutputSchema),
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
+  {
+    name: 'braintube_find_tools',
+    description: FIND_TOOLS_DESCRIPTION,
+    inputSchema: toInputSchema(findToolsSchema),
+    outputSchema: toOutputSchema(findToolsOutputSchema),
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'braintube_run_tool',
+    description: RUN_TOOL_DESCRIPTION,
+    inputSchema: toInputSchema(runToolSchema),
+    outputSchema: toOutputSchema(runToolOutputSchema),
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
 ];
 
 // Titles and behaviour hints come from the same map server.ts applies at
@@ -519,7 +539,13 @@ export const TOOLS = CARD_TOOLS.map((tool) => {
 // (server.ts registerTool proxy) and must not be advertised here either.
 // TOOLS stays complete so scripts/verify-server-card-parity.ts still checks
 // every runtime tool against its card entry.
-export const PUBLIC_TOOLS = TOOLS.filter((tool) => getRequiredTier(tool.name) !== 'admin');
+export const FULL_PUBLIC_TOOLS = TOOLS.filter((tool) => getRequiredTier(tool.name) !== 'admin');
+
+// The card shows the default (core) profile a non-admin session gets:
+// the core tools plus the two router tools (src/tool-profiles.ts).
+// `?tools=full` on the MCP URL registers FULL_PUBLIC_TOOLS minus the router pair.
+export const PUBLIC_TOOLS = FULL_PUBLIC_TOOLS.filter((tool) => CORE_TOOLS.has(tool.name) || ROUTER_TOOLS.has(tool.name));
+const FULL_PROFILE_COUNT = FULL_PUBLIC_TOOLS.filter((tool) => !ROUTER_TOOLS.has(tool.name)).length;
 
 // Report the shipped version (src/routes or dist/routes → repo root is two levels up).
 const PKG_VERSION = (JSON.parse(
@@ -540,6 +566,20 @@ serverCardRouter.get('/.well-known/mcp/server-card.json', (_req: Request, res: R
       schemes: ['oauth2'],
     },
     tools: PUBLIC_TOOLS,
+    // Default tools/list = `tools` above. Opt in to every tool with ?tools=full.
+    toolProfiles: {
+      default: 'core',
+      core: {
+        toolCount: PUBLIC_TOOLS.length,
+        description: 'Everyday search, read and save tools, plus braintube_find_tools / braintube_run_tool to reach the other read-only tools.',
+      },
+      full: {
+        toolCount: FULL_PROFILE_COUNT,
+        url: `https://mcp.brain-tube.com/mcp?${FULL_PROFILE_QUERY}`,
+        header: `${PROFILE_HEADER}: full`,
+        description: 'Every tool registered directly, including the write tools outside the core set (bulk_ingest, toggle_bookmark, Notion and Readwise).',
+      },
+    },
     resources: [],
     prompts: [],
   });
