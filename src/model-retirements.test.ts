@@ -33,7 +33,8 @@ test('no retired OpenAI chat model is named in server code', () => {
 test('the default translation request uses parameters the model accepts', () => {
   assert.equal(TRANSLATE_MODEL, 'gpt-6-luna');
   const p = translationParams(TRANSLATE_MODEL) as Record<string, unknown>;
-  assert.equal(p.temperature, undefined);
+  // Temperature is accepted only together with reasoning_effort 'none'.
+  assert.equal(p.temperature, 0);
   assert.equal(p.max_tokens, undefined);
   assert.equal(p.max_completion_tokens, 120);
   assert.equal(p.reasoning_effort, 'none');
