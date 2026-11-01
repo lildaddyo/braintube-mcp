@@ -83,7 +83,8 @@ export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   add_note:               'authenticated',
   ingest_content:         'authenticated',
   // bulk_ingest writes only to the caller's own corpus, is capped at 50 items
-  // per call and 500 new items per user per day, and needs confirm:true.
+  // per call and 500 new items per user per day, and needs the person to approve it
+  // (MCP elicitation, src/security/human-confirm.ts).
   bulk_ingest:            'authenticated',
   ingest_notion_page:     'authenticated',
   compile_knowledge:      'authenticated',

@@ -260,7 +260,8 @@ restRouter.post('/ingest', async (req, res) => {
   try {
     const result = await ingestContent(
       { title, content, source_url, source_type, tags, force_new: force_new ?? false },
-      auth(req).userId
+      auth(req).userId,
+      { kind: 'rest_api', route: '/api/ingest' }
     );
     res.status(201).json(unwrap(result));
   } catch (e) { send500(res, e); }
@@ -280,7 +281,8 @@ restRouter.post('/bulk-ingest', async (req, res) => {
   try {
     const result = await bulkIngest(
       { items, force_new: force_new ?? false },
-      auth(req).userId
+      auth(req).userId,
+      { kind: 'rest_api', route: '/api/bulk-ingest' }
     );
     res.json(unwrap(result));
   } catch (e) { send500(res, e); }

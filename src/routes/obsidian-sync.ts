@@ -1,5 +1,6 @@
 import type express from 'express';
 import { dbAdmin } from '../db/supabase.js';
+import { insertItem, updateItemContent } from '../lib/ingest-gateway.js';
 import { embedItem } from '../tools/embedding.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -128,39 +129,23 @@ export async function handleObsidianSync(
       const existingItem = (existing ?? [])[0];
       let itemId: string;
 
+      // Through the ingest gateway: provenance import:obsidian, taint >= 1. A vault holds web
+      // clippings as well as typed notes, and this server cannot tell them apart.
+      const gw = { userId, channel: { kind: 'import' as const, source: 'obsidian' as const } };
       if (existingItem) {
-        // Update existing item
-        const { error: updateErr } = await dbAdmin
-          .from('items')
-          .update({
-            title: note.title,
-            summary,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', existingItem.id);
-
-        if (updateErr) throw new Error(updateErr.message);
+        await updateItemContent(gw, existingItem.id, { title: note.title, summary });
         itemId = existingItem.id;
         updated++;
         await writeIngestLog(userId, itemId, note.title, 'updated');
       } else {
         // Insert new item
-        const { data: newItem, error: insertErr } = await dbAdmin
-          .from('items')
-          .insert({
-            user_id: userId,
-            source_type: 'obsidian',
-            url: note.path,
-            title: note.title,
-            summary,
-            taint_level: 0,
-            is_archived: false,
-          })
-          .select('id')
-          .single();
-
-        if (insertErr || !newItem) throw new Error(insertErr?.message ?? 'Insert returned no data');
-        itemId = newItem.id;
+        const created = await insertItem(gw, {
+          source_type: 'obsidian',
+          url: note.path,
+          title: note.title,
+          summary,
+        });
+        itemId = created.id;
         inserted++;
         await writeIngestLog(userId, itemId, note.title, 'inserted');
       }

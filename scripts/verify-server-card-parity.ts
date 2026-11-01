@@ -31,8 +31,8 @@
  *      reintroducing check #5's bug inside the proxy itself, which
  *      server-output-schema.test.ts's dynamic checks can't catch because
  *      they register schemas directly rather than through this proxy.
- *   7. secureWrap's cross-cutting short-circuits (role denial, injection
- *      reject, confirm-required preview) all go through shortCircuitResult()
+ *   7. secureWrap's cross-cutting short-circuits (role denial, human
+ *      confirmation outcome) all go through shortCircuitResult()
  *      rather than constructing a raw `{ content: [...] }` result — that
  *      helper marks its result isError:true so the SDK skips structuredContent
  *      validation for it entirely. Catches a future 4th short-circuit path
@@ -105,8 +105,8 @@ function extractRuntimeToolMeta(src: string): Map<string, RuntimeToolMeta> {
 }
 
 /**
- * Asserts secureWrap's pre-handler short-circuits (role denial, injection
- * reject, confirm-required preview) all route through shortCircuitResult()
+ * Asserts secureWrap's pre-handler short-circuits (role denial, human
+ * confirmation outcome) all route through shortCircuitResult()
  * rather than a raw object literal. Scoped to the region between
  * `function secureWrap(` and `let success = true;` — everything after that
  * marker is post-handler response sanitization, which legitimately spreads
@@ -125,10 +125,12 @@ function checkSecureWrapEnvelopeGuard(src: string): string[] {
   const preHandlerRegion = src.slice(fnStart, preHandlerEnd);
 
   const shortCircuitCalls = preHandlerRegion.match(/return shortCircuitResult\(/g) ?? [];
-  if (shortCircuitCalls.length < 3) {
+  // Two since 2026-11-01: role denial and the human-confirmation outcome. The injection
+  // detector no longer short-circuits (it is a logged signal, see src/security/injection.ts).
+  if (shortCircuitCalls.length < 2) {
     failures.push(
-      `SHORT-CIRCUIT GUARD: expected at least 3 "return shortCircuitResult(...)" calls in secureWrap's ` +
-      `pre-handler region (role denial, injection reject, confirm-required), found ${shortCircuitCalls.length}`
+      `SHORT-CIRCUIT GUARD: expected at least 2 "return shortCircuitResult(...)" calls in secureWrap's ` +
+      `pre-handler region (role denial, human confirmation), found ${shortCircuitCalls.length}`
     );
   }
 

@@ -363,7 +363,8 @@ app.post('/api/extension-ingest', requireAuth, mcpRateLimit, extensionCaptureDai
         tags: ['ai-conversation', resolvedType, 'extension-capture'],
         force_new: false,
       },
-      auth.userId
+      auth.userId,
+      { kind: 'extension', sourceUrl: source_url ?? null }
     );
     res.json(result);
   } catch (err) {

@@ -184,7 +184,7 @@ Deno.serve(async (req) => {
     //    is ever written to; another user's item with the same URL is never touched.
     const { data: existing } = await db
       .from("items")
-      .select("id, user_id")
+      .select("id, user_id, taint_level")
       .eq("source_url", url)
       .eq("source_type", "notion")
       .eq("user_id", ownerUserId)
@@ -199,6 +199,8 @@ Deno.serve(async (req) => {
     }
 
     const { id: itemId, user_id: userId } = existing;
+    // Imported content is untrusted (braintube-mcp src/lib/ingest-gateway.ts): taint >= 1, never lowered.
+    const taintLevel = Math.max(1, Number((existing as { taint_level?: number }).taint_level ?? 0));
     const now = new Date().toISOString();
 
     // 3. Update item content
@@ -206,6 +208,7 @@ Deno.serve(async (req) => {
       title,
       full_transcript: content,
       summary: content.slice(0, 500),
+      taint_level: taintLevel,
       updated_at: now,
     }).eq("id", itemId).eq("user_id", ownerUserId);
 

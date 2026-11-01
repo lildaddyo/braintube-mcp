@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { writeNote } from '../db/supabase.js';
+import { upsertItemNote } from '../lib/ingest-gateway.js';
 
 export const noteSchema = z.object({
   video_id: z.string().describe('Internal UUID of the item to annotate'),
@@ -13,7 +13,8 @@ export const addNoteOutputSchema = z.object({
 });
 
 export async function addNote(input: z.infer<typeof noteSchema>, userId: string) {
-  await writeNote(input.video_id, input.note, userId);
+  // Through the ingest gateway: a note saved by an AI client is agent_written, taint >= 1.
+  await upsertItemNote({ userId, channel: { kind: 'mcp_tool', tool: 'add_note' } }, input.video_id, input.note);
   return {
     content: [{
       type: 'text' as const,
