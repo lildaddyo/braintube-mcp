@@ -86,6 +86,8 @@ import {
   logAccessDenied,
 } from './security/tool-access.js';
 import type { UserRole } from './security/tool-access.js';
+import { FEATURE_GATE_OFF, featureAllows, featureAllowsNow, resolveFeatureGate } from './security/feature-filter.js';
+import type { FeatureGate } from './security/feature-filter.js';
 import type { AuthContext } from './types.js';
 
 // Resolve package.json relative to this file so the MCP initialize handshake
@@ -116,12 +118,20 @@ export async function createMcpServer(auth: AuthContext, opts: McpServerOptions 
   // and the tool registration proxy without an extra DB round-trip per call.
   const userRole: UserRole = await resolveUserRole(auth.userId);
   const profile = resolveProfile(userRole, opts.profile);
-  console.error(`[rbac] session for ${auth.userId} — role: ${userRole}, tools: ${profile}`);
-  return buildMcpServer(auth, userRole, profile);
+  // MCP_FEATURE_FILTER (src/security/feature-filter.ts); 'off' makes no DB call.
+  const features = await resolveFeatureGate(auth.userId);
+  const featureLog = features.mode === 'off' ? '' : `, features: ${features.mode} ${features.enabled ? `[${[...features.enabled].join(',')}]` : '(lookup unavailable, not filtering)'}`;
+  console.error(`[rbac] session for ${auth.userId} — role: ${userRole}, tools: ${profile}${featureLog}`);
+  return buildMcpServer(auth, userRole, profile, features);
 }
 
-/** createMcpServer() with the role already resolved (tests pass it directly). */
-export function buildMcpServer(auth: AuthContext, userRole: UserRole, profile: ToolProfile): McpServer {
+/** createMcpServer() with the role and feature gate already resolved (tests pass them directly). */
+export function buildMcpServer(
+  auth: AuthContext,
+  userRole: UserRole,
+  profile: ToolProfile,
+  features: FeatureGate = FEATURE_GATE_OFF,
+): McpServer {
   const server = new McpServer({
     name: 'braintube-mcp',
     version: pkg.version,
@@ -258,6 +268,19 @@ export function buildMcpServer(auth: AuthContext, userRole: UserRole, profile: T
         );
       }
 
+      // ── 0b. Feature check (L5, src/security/feature-filter.ts) ─────────────
+      // Same filter as at registration, re-checked against the current answer
+      // (cached 60 s per user) so a revoke or kill switch reaches open sessions,
+      // and because the router (braintube_run_tool) and crafted requests reach
+      // handlers through this wrapper. Shadow mode logs and lets the call through.
+      if (!await featureAllowsNow(features, auth.userId, toolName)) {
+        auditLog(auth.userId, toolName, input, false);
+        return shortCircuitResult(
+          'access_denied',
+          `[ACCESS DENIED] Tool \`${toolName}\` is not available on your account.`
+        );
+      }
+
       // ── 1. Injection detection ──────────────────────────────────────────────
       for (const s of extractStrings(input)) {
         if (detectInjection(s)) {
@@ -361,6 +384,9 @@ export function buildMcpServer(auth: AuthContext, userRole: UserRole, profile: T
       console.error(`[rbac] skipping registration of "${name}" (requires ${requiredTier}, user has ${userRole})`);
       return;
     }
+
+    // ── Feature filter (L5): hidden tools are neither listed nor routable ────
+    if (!featureAllows(features, auth.userId, name, 'register')) return;
 
     let securedDef = def;
 
