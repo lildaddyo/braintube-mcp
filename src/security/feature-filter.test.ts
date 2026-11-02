@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 
 // Forced (not ??=) so the feature RPC and the fire-and-forget audit / security
 // writes go to a closed port even on a machine with real Supabase vars set.
@@ -11,7 +12,8 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
 const { buildMcpServer } = await import('../server.js');
 const { TOOL_ACCESS_MAP, TOOL_FEATURES, getRequiredTier } = await import('./tool-access.js');
 const {
-  FEATURE_GATE_OFF, featureAllows, featureFilterMode, resolveFeatureGate, resolveUserFeatures, taggedFeatureKeys,
+  FEATURE_GATE_OFF, checkFeatureTags, createFeatureResolver, featureAllows, featureAllowsNow, featureFilterMode,
+  isMissingFunction, resolveFeatureGate, resolveUserFeatures, taggedFeatureKeys,
 } = await import('./feature-filter.js');
 import type { FeatureGate } from './feature-filter.js';
 import type { UserRole } from './tool-access.js';
@@ -85,7 +87,131 @@ test('off makes no lookup; a missing or failing feature RPC yields a gate that f
   assert.equal(await resolveFeatureGate(AUTH.userId, 'off'), FEATURE_GATE_OFF);
   // SUPABASE_URL points at a closed port: the lookup fails and the filter is skipped.
   assert.equal(await resolveUserFeatures(AUTH.userId), null);
-  assert.deepEqual(await resolveFeatureGate(AUTH.userId, 'enforce'), { mode: 'enforce', enabled: null });
+  const gate = await resolveFeatureGate(AUTH.userId, 'enforce');
+  assert.equal(gate.mode, 'enforce');
+  assert.equal(gate.enabled, null);
+  assert.equal(featureAllows(gate, AUTH.userId, 'chat_with_brain', 'register'), true);
+});
+
+test('isMissingFunction: PostgREST PGRST202 and Postgres 42883 only', () => {
+  assert.equal(isMissingFunction({ code: 'PGRST202' }), true);
+  assert.equal(isMissingFunction({ code: '42883' }), true);
+  assert.equal(isMissingFunction({ code: '57014' }), false);
+  assert.equal(isMissingFunction(new TypeError('fetch failed')), false);
+  assert.equal(isMissingFunction(null), false);
+});
+
+// ─── Resolver: 60 s cache, shared in-flight lookup, last good answer ──────────
+
+function fakeResolver(opts: { fail?: () => boolean; maxUsers?: number } = {}) {
+  let t = 0;
+  let calls = 0;
+  const failures: Array<[string, boolean]> = [];
+  const resolver = createFeatureResolver({
+    lookup: async (userId) => {
+      calls++;
+      if (opts.fail?.()) throw new Error('db down');
+      return new Set([`${userId}:${calls}`]);
+    },
+    ttlMs: 60_000,
+    lastGoodMs: 6 * 3_600_000,
+    maxUsers: opts.maxUsers,
+    now: () => t,
+    onFailure: (userId, _err, usedLastGood) => { failures.push([userId, usedLastGood]); },
+  });
+  return { resolver, advance: (ms: number) => { t += ms; }, calls: () => calls, failures };
+}
+
+test('resolver caches 60 s per user and shares one lookup between concurrent sessions', async () => {
+  const f = fakeResolver();
+  const [a, b] = await Promise.all([f.resolver.get('u'), f.resolver.get('u')]);
+  assert.equal(f.calls(), 1, 'concurrent sessions share one lookup');
+  assert.deepEqual(a, b);
+  f.advance(59_999);
+  assert.deepEqual(await f.resolver.get('u'), new Set(['u:1']));
+  assert.equal(f.calls(), 1);
+  f.advance(1);
+  assert.deepEqual(await f.resolver.get('u'), new Set(['u:2']), 'refreshed after 60 s');
+});
+
+test('resolver: a failed lookup uses the last good answer for 6 h, then gives up (null)', async () => {
+  let failing = false;
+  const f = fakeResolver({ fail: () => failing });
+  assert.deepEqual(await f.resolver.get('u'), new Set(['u:1']));
+  failing = true;
+  f.advance(61_000);
+  assert.deepEqual(await f.resolver.get('u'), new Set(['u:1']), 'last good answer');
+  assert.deepEqual(f.failures.pop(), ['u', true]);
+  f.advance(6 * 3_600_000);
+  assert.equal(await f.resolver.get('u'), null, 'too old: filter skipped');
+  assert.deepEqual(f.failures.pop(), ['u', false]);
+  assert.equal(await f.resolver.get('never-seen'), null, 'no history: filter skipped');
+  failing = false;
+  assert.ok((await f.resolver.get('u'))?.size, 'recovers on the next good lookup');
+});
+
+test('resolver keeps at most maxUsers entries, dropping the oldest', async () => {
+  const f = fakeResolver({ maxUsers: 2 });
+  await f.resolver.get('a');
+  await f.resolver.get('b');
+  await f.resolver.get('c');
+  const before = f.calls();
+  await f.resolver.get('b');
+  await f.resolver.get('c');
+  assert.equal(f.calls(), before, 'b and c still cached');
+  await f.resolver.get('a');
+  assert.equal(f.calls(), before + 1, 'a was evicted');
+});
+
+// ─── Call time uses the current answer ────────────────────────────────────────
+
+test('featureAllowsNow: a feature revoked mid-session is refused at call time (enforce) or logged (shadow)', async () => {
+  const calls: unknown[][] = [];
+  const log = (...args: unknown[]) => { calls.push(args); };
+  let currentAsked = 0;
+  const current = async () => { currentAsked++; return new Set<string>(); };
+
+  const enforced: FeatureGate = { mode: 'enforce', enabled: new Set(['brains']), current };
+  assert.equal(await featureAllowsNow(enforced, AUTH.userId, 'list_brains', log), false);
+  assert.deepEqual(calls.pop(), [AUTH.userId, 'list_brains', 'brains', 'enforce', 'call']);
+
+  const shadowed: FeatureGate = { mode: 'shadow', enabled: new Set(['brains']), current };
+  assert.equal(await featureAllowsNow(shadowed, AUTH.userId, 'list_brains', log), true);
+  assert.deepEqual(calls.pop(), [AUTH.userId, 'list_brains', 'brains', 'shadow', 'call']);
+
+  const asked = currentAsked;
+  assert.equal(await featureAllowsNow(enforced, AUTH.userId, 'search_knowledge', log), true);
+  assert.equal(await featureAllowsNow({ ...FEATURE_GATE_OFF, current }, AUTH.userId, 'list_brains', log), true);
+  assert.equal(currentAsked, asked, 'no lookup for untagged tools or when off');
+
+  const unknownNow: FeatureGate = { mode: 'enforce', enabled: new Set(), current: async () => null };
+  assert.equal(await featureAllowsNow(unknownNow, AUTH.userId, 'list_brains', log), true, 'lookup failing now: not filtered');
+});
+
+test('enforce: a tool listed at connect but revoked since is refused when called', async () => {
+  const gate: FeatureGate = { mode: 'enforce', enabled: new Set(['brains', 'wiki']), current: async () => new Set() };
+  const s = await connect('authenticated', 'full', gate);
+  try {
+    assert.ok((await s.client.listTools()).tools.some((t) => t.name === 'list_brains'));
+    // Raw request: Client.callTool() would validate the short-circuit against list_brains' outputSchema.
+    const r = await s.client.request(
+      { method: 'tools/call', params: { name: 'list_brains', arguments: {} } },
+      CallToolResultSchema,
+    );
+    assert.equal(r.isError, true);
+    assert.match((r.content as Array<{ text: string }>)[0].text, /not available on your account/);
+  } finally {
+    await s.close();
+  }
+});
+
+// ─── Startup check ────────────────────────────────────────────────────────────
+
+test('checkFeatureTags: off skips; all keys known passes; an unknown key is reported; unreadable table skips', async () => {
+  assert.equal(await checkFeatureTags('off', async () => { throw new Error('must not read'); }), null);
+  assert.deepEqual(await checkFeatureTags('enforce', async () => new Set(['brains', 'wiki', 'xp'])), []);
+  assert.deepEqual(await checkFeatureTags('shadow', async () => new Set(['brains'])), ['wiki']);
+  assert.equal(await checkFeatureTags('enforce', async () => { throw new Error('relation does not exist'); }), null);
 });
 
 // ─── featureAllows: the decision and what gets logged ─────────────────────────

@@ -86,7 +86,7 @@ import {
   logAccessDenied,
 } from './security/tool-access.js';
 import type { UserRole } from './security/tool-access.js';
-import { FEATURE_GATE_OFF, featureAllows, resolveFeatureGate } from './security/feature-filter.js';
+import { FEATURE_GATE_OFF, featureAllows, featureAllowsNow, resolveFeatureGate } from './security/feature-filter.js';
 import type { FeatureGate } from './security/feature-filter.js';
 import type { AuthContext } from './types.js';
 
@@ -269,10 +269,11 @@ export function buildMcpServer(
       }
 
       // ── 0b. Feature check (L5, src/security/feature-filter.ts) ─────────────
-      // Same filter as at registration, re-checked here because the router
-      // (braintube_run_tool) and crafted requests reach handlers through this
-      // wrapper. Shadow mode logs and lets the call through.
-      if (!featureAllows(features, auth.userId, toolName, 'call')) {
+      // Same filter as at registration, re-checked against the current answer
+      // (cached 60 s per user) so a revoke or kill switch reaches open sessions,
+      // and because the router (braintube_run_tool) and crafted requests reach
+      // handlers through this wrapper. Shadow mode logs and lets the call through.
+      if (!await featureAllowsNow(features, auth.userId, toolName)) {
         auditLog(auth.userId, toolName, input, false);
         return shortCircuitResult(
           'access_denied',
