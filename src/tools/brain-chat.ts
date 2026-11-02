@@ -30,7 +30,9 @@ export const chatWithBrainOutputSchema = z.object({
   session_id: z.string().optional(),
 }).passthrough();
 
-const BRAIN_CHAT_URL = 'https://iqjnmmtvhyavgrsxpoao.supabase.co/functions/v1/brain-chat';
+// Pinned to the database region (eu-west-1). Unpinned, Supabase ran brain-chat next to Railway in the
+// US, many database round trips away: one MCP chat took 24.8 s (edge logs 2026-11-01); Ireland-side ~0.6 s.
+const BRAIN_CHAT_URL = 'https://iqjnmmtvhyavgrsxpoao.supabase.co/functions/v1/brain-chat?forceFunctionRegion=eu-west-1';
 
 /**
  * Headers that tell brain-chat who is asking. brain-chat honours x-bt-acting-user only
