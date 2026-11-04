@@ -29,7 +29,7 @@ export const HUMAN_CONFIRM_REQUIRED = new Set([
   'connect_readwise',
 ]);
 
-export const APP_URL = 'https://braintube.app';
+export const APP_URL = 'https://app.brain-tube.com';
 
 export type ConfirmOutcome =
   | { ok: true }
