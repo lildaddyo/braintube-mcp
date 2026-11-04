@@ -22,7 +22,7 @@ import { z } from 'zod';
  * correct), but the SDK's runtime output validator does not.
  */
 export const shortCircuitEnvelopeSchema = z.object({
-  status: z.enum(['access_denied', 'injection_blocked', 'confirmation_required']),
+  status: z.enum(['access_denied', 'confirmation_unavailable', 'confirmation_declined']),
   message: z.string(),
 });
 

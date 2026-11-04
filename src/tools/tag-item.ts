@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { dbAdmin, linkTags } from '../db/supabase.js';
+import { updateItemTags } from '../lib/ingest-gateway.js';
 
 export const tagItemSchema = z.object({
   item_id: z.string().guid().describe('UUID of the item to tag'),
@@ -42,13 +43,9 @@ export async function tagItem(input: z.infer<typeof tagItemSchema>, userId: stri
     ...new Set([...current.filter(t => !toRemove.has(t)), ...toAdd])
   ];
 
-  const { error: updateErr } = await dbAdmin
-    .from('items')
-    .update({ tags: updated })
-    .eq('id', item_id)
-    .eq('user_id', userId);
-
-  if (updateErr) throw new Error(`Failed to update tags: ${updateErr.message}`);
+  // Through the ingest gateway: agent-chosen tags come back with the item, so its taint is
+  // raised to at least 1 (content provenance is unchanged).
+  await updateItemTags({ userId, channel: { kind: 'mcp_tool', tool: 'tag_item' } }, item_id, updated);
 
   const added = toAdd.filter(t => !current.includes(t));
   const removed = current.filter(t => toRemove.has(t));

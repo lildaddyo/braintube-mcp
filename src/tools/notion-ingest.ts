@@ -6,6 +6,7 @@ import type {
 } from '@notionhq/client/build/src/api-endpoints.js';
 import { dbAdmin } from '../db/supabase.js';
 import { findItemBySourceUrl, findItemByTitle } from '../db/supabase.js';
+import { insertItem, updateItemContent } from '../lib/ingest-gateway.js';
 import { embedItem } from './embedding.js';
 
 import { openFromStorage, sealForStorage } from '../lib/secret-box.js';
@@ -199,41 +200,31 @@ export async function ingestNotionPage(
   let itemId: string;
   let action: 'inserted' | 'updated';
 
+  // Through the ingest gateway: provenance import:notion, taint >= 1 (a Notion page can hold
+  // anything pasted from the web, and the key that reads it is set through an AI client).
+  const gw = { userId, channel: { kind: 'import' as const, source: 'notion' as const } };
   if (existingId) {
-    // Update existing item
-    const { error } = await dbAdmin
-      .from('items')
-      .update({
-        title,
-        summary,
-        source_url: pageUrlNormalized,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', existingId);
-
-    if (error) throw new Error(`Failed to update notion item: ${error.message}`);
+    try {
+      await updateItemContent(gw, existingId, { title, summary, source_url: pageUrlNormalized });
+    } catch (err) {
+      throw new Error(`Failed to update notion item: ${err instanceof Error ? err.message : String(err)}`);
+    }
     itemId = existingId;
     action = 'updated';
   } else {
-    // Insert new item — generate UUID via crypto
-    const { data: inserted, error } = await dbAdmin
-      .from('items')
-      .insert({
-        user_id: userId,
+    try {
+      const inserted = await insertItem(gw, {
         source_type: 'notion',
-        notion_page_id: pageId,
         title,
         summary,
         url: pageUrlNormalized,
         source_url: pageUrlNormalized,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-      .select('id')
-      .single();
-
-    if (error || !inserted) throw new Error(`Failed to insert notion item: ${error?.message}`);
-    itemId = inserted.id;
+        extra: { notion_page_id: pageId },
+      });
+      itemId = inserted.id;
+    } catch (err) {
+      throw new Error(`Failed to insert notion item: ${err instanceof Error ? err.message : String(err)}`);
+    }
     action = 'inserted';
   }
 

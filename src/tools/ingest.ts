@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { dbAdmin } from '../db/supabase.js';
 import { findItemBySourceUrl, findItemByTitle, linkTags, countIngestsToday } from '../db/supabase.js';
+import { insertItem, updateItemContent } from '../lib/ingest-gateway.js';
+import type { WriteChannel, TrustStamp } from '../lib/ingest-gateway.js';
 import { embedItem } from './embedding.js';
 import { sourceTypeEnum } from '../schemas/source-types.js';
 
@@ -31,6 +33,8 @@ export const ingestContentOutputSchema = z.object({
   id: z.string(),
   title: z.string(),
   action: z.enum(['inserted', 'updated']),
+  provenance: z.string().describe('Who wrote this content: agent_written for anything saved by an AI client'),
+  taint_level: z.number().describe('Trust level stored with the item (0 = typed by the user in the app, >= 1 = untrusted)'),
 });
 
 // ─── Daily limit ──────────────────────────────────────────────────────────────
@@ -49,10 +53,15 @@ export class DailyIngestLimitError extends Error {
 
 // ─── Implementation ───────────────────────────────────────────────────────────
 
+/**
+ * `channel` says where the write came from; the ingest gateway turns it into provenance + taint.
+ * There is no way to pass a taint level or provenance from the caller.
+ */
 export async function ingestContent(
   input: z.infer<typeof ingestContentSchema>,
-  userId: string
-): Promise<{ id: string; title: string; action: 'inserted' | 'updated' }> {
+  userId: string,
+  channel: WriteChannel,
+): Promise<{ id: string; title: string; action: 'inserted' | 'updated'; provenance: string; taint_level: number }> {
   const { title, content, source_url, source_type, tags, force_new } = input;
 
   // ── Dedup check ────────────────────────────────────────────────────────────
@@ -70,58 +79,43 @@ export async function ingestContent(
   }
 
   const summary = content.slice(0, 500) || null;
-  const now = new Date().toISOString();
+  const gw = { userId, channel };
   let itemId: string;
   let action: 'inserted' | 'updated';
+  let stamp: TrustStamp;
+  let storedTags: string[] = tags ?? [];
 
   if (existingId) {
-    // ── UPDATE existing item ───────────────────────────────────────────────
-    const { error } = await dbAdmin
-      .from('items')
-      .update({
-        title,
-        summary,
-        full_transcript: content,
-        ...(source_url ? { source_url, url: source_url } : {}),
-        updated_at: now,
-      })
-      .eq('id', existingId);
-
-    if (error) throw new Error(`ingest_content: update failed — ${error.message}`);
+    // ── UPDATE existing item (taint never goes down; provenance becomes this writer) ──
+    try {
+      ({ stamp } = await updateItemContent(gw, existingId, {
+        title, summary, full_transcript: content, source_url: source_url ?? null, tags,
+      }));
+    } catch (err) {
+      throw new Error(`ingest_content: ${err instanceof Error ? err.message : String(err)}`);
+    }
     itemId = existingId;
     action = 'updated';
   } else {
     // ── INSERT new item ───────────────────────────────────────────────────
     if ((await countIngestsToday(userId)) >= DAILY_INGEST_LIMIT) throw new DailyIngestLimitError();
-
-    const { data, error } = await dbAdmin
-      .from('items')
-      .insert({
-        user_id: userId,
-        source_type,
-        title,
-        summary,
-        full_transcript: content,
-        source_url: source_url ?? null,
-        url: source_url ?? `braintube://manual/${Date.now()}`,
-        status: 'indexed',
-        taint_level: 0,
-        is_user_created: true,
-        is_archived: false,
-        created_at: now,
-        updated_at: now,
-      })
-      .select('id')
-      .single();
-
-    if (error || !data) throw new Error(`ingest_content: insert failed — ${error?.message}`);
-    itemId = data.id;
+    try {
+      const inserted = await insertItem(gw, {
+        source_type, title, summary, full_transcript: content, source_url: source_url ?? null, tags,
+        extra: { status: 'indexed' },
+      });
+      ({ stamp } = inserted);
+      storedTags = inserted.tags;
+      itemId = inserted.id;
+    } catch (err) {
+      throw new Error(`ingest_content: ${err instanceof Error ? err.message : String(err)}`);
+    }
     action = 'inserted';
   }
 
-  // ── Link tags (best-effort) ────────────────────────────────────────────────
-  if (tags && tags.length > 0) {
-    await linkTags(itemId, tags, userId);
+  // ── Link tags (best-effort), incl. the visible `agent-written` label ────────
+  if (storedTags.length > 0) {
+    await linkTags(itemId, storedTags, userId);
   }
 
   // ── Auto-embed (best-effort — failure saves item with embedding = NULL) ───
@@ -144,5 +138,5 @@ export async function ingestContent(
     console.error(`[ingest] ingest_log write failed (non-fatal):`, err);
   }
 
-  return { id: itemId, title, action };
+  return { id: itemId, title, action, provenance: stamp.provenance, taint_level: stamp.taint_level };
 }

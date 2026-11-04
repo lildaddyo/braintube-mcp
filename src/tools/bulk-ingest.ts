@@ -1,6 +1,7 @@
 import { z } from 'zod';
-import { dbAdmin } from '../db/supabase.js';
 import { findItemBySourceUrl, findItemByTitle, linkTags, countIngestsToday } from '../db/supabase.js';
+import { insertItem, updateItemContent } from '../lib/ingest-gateway.js';
+import type { WriteChannel } from '../lib/ingest-gateway.js';
 import { embedItemsBatch } from './embedding.js';
 import { sourceTypeEnum } from '../schemas/source-types.js';
 
@@ -49,7 +50,8 @@ export interface BulkIngestResult {
 
 export async function bulkIngest(
   input: z.infer<typeof bulkIngestSchema>,
-  userId: string
+  userId: string,
+  channel: WriteChannel,
 ): Promise<BulkIngestResult> {
   const { items, force_new } = input;
 
@@ -68,7 +70,7 @@ export async function bulkIngest(
 
   const result: BulkIngestResult = { inserted: 0, updated: 0, skipped: 0, errors: [] };
   const toEmbed: string[] = [];
-  const now = new Date().toISOString();
+  const gw = { userId, channel };
 
   // Items that would exceed the daily limit are skipped (not errored)
   let insertBudget = remaining;
@@ -91,21 +93,13 @@ export async function bulkIngest(
 
       const summary = content.slice(0, 500) || null;
       let itemId: string;
+      let storedTags: string[] = tags ?? [];
 
       if (existingId) {
-        // UPDATE — does not count against daily insert budget
-        const { error } = await dbAdmin
-          .from('items')
-          .update({
-            title,
-            summary,
-            full_transcript: content,
-            ...(source_url ? { source_url, url: source_url } : {}),
-            updated_at: now,
-          })
-          .eq('id', existingId);
-
-        if (error) throw new Error(`update failed — ${error.message}`);
+        // UPDATE — does not count against daily insert budget; taint never goes down
+        await updateItemContent(gw, existingId, {
+          title, summary, full_transcript: content, source_url: source_url ?? null, tags,
+        });
         itemId = existingId;
         result.updated++;
       } else {
@@ -116,35 +110,19 @@ export async function bulkIngest(
           continue;
         }
 
-        const { data, error } = await dbAdmin
-          .from('items')
-          .insert({
-            user_id:        userId,
-            source_type,
-            title,
-            summary,
-            full_transcript: content,
-            source_url:     source_url ?? null,
-            url:            source_url ?? `braintube://manual/${Date.now()}`,
-            status:         'indexed',
-            taint_level:    0,
-            is_user_created: true,
-            is_archived:    false,
-            created_at:     now,
-            updated_at:     now,
-          })
-          .select('id')
-          .single();
-
-        if (error || !data) throw new Error(`insert failed — ${error?.message}`);
-        itemId = data.id;
+        const inserted = await insertItem(gw, {
+          source_type, title, summary, full_transcript: content, source_url: source_url ?? null, tags,
+          extra: { status: 'indexed' },
+        });
+        itemId = inserted.id;
+        storedTags = inserted.tags;
         result.inserted++;
         insertBudget--;
       }
 
       // Link tags (best-effort)
-      if (tags && tags.length > 0) {
-        await linkTags(itemId, tags, userId);
+      if (storedTags.length > 0) {
+        await linkTags(itemId, storedTags, userId);
       }
 
       toEmbed.push(itemId);

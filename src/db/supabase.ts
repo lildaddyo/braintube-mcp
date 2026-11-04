@@ -176,34 +176,7 @@ export async function getCorpusStats(userId: string) {
   };
 }
 
-// ─── Write note ───────────────────────────────────────────────────────────────
-
-export async function writeNote(videoId: string, note: string, userId: string) {
-  // Ownership check — prevents writing to another user's item even with valid JWT
-  const { data: item } = await dbAdmin
-    .from('items')
-    .select('id')
-    .eq('id', videoId)
-    .eq('user_id', userId)
-    .single();
-
-  if (!item) throw new Error('Item not found or does not belong to this user');
-
-  // Upsert into item_notes (unique constraint: item_id, user_id)
-  const { error } = await dbAdmin
-    .from('item_notes')
-    .upsert(
-      {
-        item_id: videoId,
-        user_id: userId,
-        content: note,
-        updated_at: new Date().toISOString()
-      },
-      { onConflict: 'item_id,user_id' }
-    );
-
-  if (error) throw new Error(`Failed to write note: ${error.message}`);
-}
+// Notes are written by the ingest gateway (src/lib/ingest-gateway.ts, upsertItemNote).
 
 // ─── Dedup helpers ────────────────────────────────────────────────────────────
 

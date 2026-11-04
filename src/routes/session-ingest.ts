@@ -32,6 +32,7 @@ import type { AuthContext } from '../types.js';
 import { dbAdmin } from '../db/supabase.js';
 import { logOpenAiUsage, withUsageContext } from '../lib/usage-log.js';
 import { resolveUserRole, type UserRole } from '../security/tool-access.js';
+import { sessionArchiveStamp, writeWithOptionalColumns } from '../lib/ingest-gateway.js';
 
 // -- Limits and constants (from the spec) --------------------------------------------------
 
@@ -412,17 +413,24 @@ class StageError extends Error {
 const codeOf = (error: { code?: string } | null | undefined): string => error?.code ?? 'unknown';
 
 async function upsertSession(db: SupabaseClient, userId: string, req: IngestRequest): Promise<string> {
+  // Stamped by the ingest gateway's rules: an archived AI session holds tool output (web pages,
+  // files) as well as what the user typed, so it is import:claude_session, taint >= 1.
+  const stamp = sessionArchiveStamp(
+    ...req.rounds.flatMap((r) => [r.human, r.assistant]),
+  );
   const row: Record<string, unknown> = {
+    ...req.meta,
     user_id: userId,
     surface: req.surface,
     external_id: req.external_id,
-    ...req.meta,
+    provenance: stamp.provenance,
+    taint_level: stamp.taint_level,
   };
-  const { data, error } = await db
+  const { data, error } = await writeWithOptionalColumns<{ id: string }, Record<string, unknown>>('claude_sessions', row, (r) => db
     .from('claude_sessions')
-    .upsert(row, { onConflict: 'user_id,surface,external_id' })
+    .upsert(r, { onConflict: 'user_id,surface,external_id' })
     .select('id')
-    .single();
+    .single() as unknown as PromiseLike<{ data: { id: string } | null; error: { code?: string; message?: string } | null }>);
   if (error || !data) throw new StageError('session_upsert', error ? codeOf(error) : 'no_row');
   return (data as { id: string }).id;
 }
@@ -434,7 +442,8 @@ async function upsertRounds(
   rounds: IngestRound[],
 ): Promise<void> {
   // No `embedding` key on purpose: an existing embedding survives a re-upload of the round.
-  const rows = rounds.map((r) => ({
+  const rows: Array<Record<string, unknown>> = rounds.map((r) => ({
+    ...sessionArchiveStamp(r.human, r.assistant),
     session_id: sessionId,
     user_id: userId,
     round_no: r.round_no,
@@ -447,7 +456,8 @@ async function upsertRounds(
     last_message_uuid: r.last_message_uuid,
     occurred_at: r.occurred_at,
   }));
-  const { error } = await db.from('session_rounds').upsert(rows, { onConflict: 'session_id,round_no' });
+  const { error } = await writeWithOptionalColumns<null, Array<Record<string, unknown>>>('session_rounds', rows,
+    (r) => db.from('session_rounds').upsert(r, { onConflict: 'session_id,round_no' }) as unknown as PromiseLike<{ data: null; error: { code?: string; message?: string } | null }>);
   if (error) throw new StageError('rounds_upsert', codeOf(error));
 }
 

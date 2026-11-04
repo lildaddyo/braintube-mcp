@@ -7,14 +7,35 @@
  *
  * Strategy:
  *   1. Strip zero-width / invisible Unicode characters
- *   2. Remove HTML/XML tags (could carry hidden content)
+ *   2. Remove instruction blocks WITH their content (<IMPORTANT>…</IMPORTANT>, <system>…, the
+ *      classic tool-poisoning carrier), then any remaining HTML/XML tags
+ *   2b. Remove sentences that point at local secrets (~/.ssh, id_rsa, .env, mcp.json) or tell
+ *      the model to hide something from the user
  *   3. Remove ChatML / special LLM control tokens
  *   4. Redact explicit instruction-override phrases
  *   5. Strip Markdown headings that start instruction-override keywords
  *
  * The sanitizeToolDescription() function is SAFE to call on legitimate tool
  * descriptions — it only removes content that has no place in a tool description.
+ *
+ * Exposure is low: BrainTube's tool metadata is first-party and lives in this repo. This is a
+ * backstop that also makes findToolPoisoning() available to the startup audit.
  */
+
+const INSTRUCTION_BLOCK_RE =
+  /<\s*(important|system|instructions?|secret|hidden|admin|note|context|rules?|assistant)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi;
+const SENSITIVE_SENTENCE_RE =
+  /[^.\n]*(~\/\.ssh|id_rsa|id_ed25519|\.aws\/credentials|\/etc\/passwd|\.env\b|mcp\.json|\.cursor\/|claude_desktop_config|(do\s+not|don'?t|never)\s+(tell|mention|inform|reveal\s+to|show)\s+(the\s+)?user|without\s+(telling|informing)\s+the\s+user)[^.\n]*[.\n]?/gi;
+
+/** Reasons a raw (unsanitised) tool description looks like tool poisoning. */
+export function findToolPoisoning(description: string): string[] {
+  const out: string[] = [];
+  if (!description) return out;
+  if (new RegExp(INSTRUCTION_BLOCK_RE.source, 'i').test(description)) out.push('hidden instruction block (<IMPORTANT>/<system>…)');
+  if (new RegExp(SENSITIVE_SENTENCE_RE.source, 'i').test(description)) out.push('reference to local secrets or to hiding actions from the user');
+  if (detectInjection(description)) out.push('instruction-override pattern');
+  return out;
+}
 
 import { detectInjection } from './injection.js';
 
@@ -32,8 +53,12 @@ export function sanitizeToolDescription(description: string): string {
   // 1. Zero-width and invisible Unicode steganography characters
   clean = clean.replace(/[\u0000\u00AD\u200B\u200C\u200D\u200E\u200F\u2028\u2029\u202A-\u202F\u2060\u2061\u2062\u2063\u2064\uFEFF\uFFF9\uFFFA\uFFFB\u180E]/g, '');
 
-  // 2. HTML/XML tags (no legitimate use in tool descriptions)
+  // 2. Instruction blocks with their content, then any remaining HTML/XML tags
+  clean = clean.replace(INSTRUCTION_BLOCK_RE, '[REMOVED]');
   clean = clean.replace(/<\/?[a-zA-Z][^>]{0,200}>/g, '');
+
+  // 2b. Sentences that point at local secrets or ask to hide actions from the user
+  clean = clean.replace(SENSITIVE_SENTENCE_RE, '[REMOVED] ');
 
   // 3. ChatML / special LLM control tokens
   clean = clean.replace(/<\|im_start\|>|<\|im_end\|>|<\|system\|>|<\|user\|>|<\|assistant\|>/gi, '');
@@ -79,10 +104,11 @@ export interface ToolDescriptionWarning {
 export function auditToolDescriptions(tools: ToolMeta[]): ToolDescriptionWarning[] {
   const warnings: ToolDescriptionWarning[] = [];
   for (const tool of tools) {
-    if (detectInjection(tool.description)) {
+    const findings = findToolPoisoning(tool.description);
+    if (findings.length > 0) {
       warnings.push({
         tool:    tool.name,
-        warning: 'Description contains injection-like patterns after sanitization',
+        warning: `Description still looks poisoned after sanitization: ${findings.join('; ')}`,
       });
     }
   }
