@@ -1,7 +1,45 @@
 import OpenAI from 'openai';
 import { embeddingCache, translationCache, normaliseQuery, hashKey } from './ttl-cache.js';
-import { logOpenAiUsage } from './usage-log.js';
+import { logOpenAiUsage, currentUsageContext } from './usage-log.js';
 import { TIMEOUTS } from './timeouts.js';
+
+/**
+ * D-211 (2026-11-04): embeddings and query translation go through the app's `mcp-ai` edge function
+ * on the app's OpenAI key, so this server holds no OpenAI key of its own. Railway's key died on
+ * 11-02 (429, then revoked) and every search silently fell back to keyword-only for two days.
+ * The edge function writes the cost row (endpoint mcp/<tool>, acting user). OPENAI_VIA_APP=off
+ * calls OpenAI directly with OPENAI_API_KEY again.
+ */
+export function viaApp(): boolean {
+  return process.env.OPENAI_VIA_APP !== 'off' && !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+}
+
+async function appAi<T>(body: Record<string, unknown>, timeoutMs: number): Promise<T> {
+  const ctx = currentUsageContext();
+  // Pinned next to the database and the function's own OpenAI calls (eu-west-1).
+  const res = await fetch(`${process.env.SUPABASE_URL}/functions/v1/mcp-ai?forceFunctionRegion=eu-west-1`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` },
+    body: JSON.stringify({ ...body, tool: ctx?.tool, user_id: ctx?.userId }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const json = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
+  if (!res.ok || !json) throw new Error(`mcp-ai ${res.status}: ${json?.error ?? 'no body'}`.slice(0, 300));
+  return json;
+}
+
+async function appEmbed(texts: string[], timeoutMs: number): Promise<number[][]> {
+  const out: number[][] = [];
+  for (let i = 0; i < texts.length; i += 100) {
+    const { embeddings } = await appAi<{ embeddings: (number[] | null)[] }>({ mode: 'embed', texts: texts.slice(i, i + 100) }, timeoutMs);
+    for (const v of embeddings ?? []) {
+      if (!Array.isArray(v) || v.length !== EMBED_DIMS) throw new Error(`mcp-ai: bad embedding (${Array.isArray(v) ? v.length : 'none'})`);
+      out.push(v);
+    }
+  }
+  if (out.length !== texts.length) throw new Error(`mcp-ai: ${out.length} embeddings for ${texts.length} texts`);
+  return out;
+}
 
 /**
  * OpenAI client for embeddings with a bounded budget (F6): the SDK default is 600 s and 2 retries,
@@ -37,6 +75,7 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 /** Embed many texts in one request (order kept). */
 export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
+  if (viaApp()) return appEmbed(texts.map((t) => t.slice(0, 8000)), TIMEOUTS.openAiEmbedBatchMs);
   const openai = embeddingClient(TIMEOUTS.openAiEmbedBatchMs);
   const t0 = Date.now();
   try {
@@ -50,6 +89,7 @@ export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
 }
 
 async function embedUncached(text: string): Promise<number[]> {
+  if (viaApp()) return (await appEmbed([text.slice(0, 8000)], TIMEOUTS.openAiEmbedMs))[0];
   const openai = embeddingClient();
   const t0 = Date.now();
   // Logged here, inside the cache's compute step, so a cache hit writes no cost row.
@@ -71,14 +111,15 @@ async function embedUncached(text: string): Promise<number[]> {
 export const TRANSLATE_MODEL = 'gpt-6-luna';
 
 /**
- * gpt-6 models reject temperature 0 and max_tokens (400, so every search would silently lose its
- * translation); without reasoning_effort 'none' they spend ~60 reasoning tokens of the 120 cap.
+ * gpt-6 models reject max_tokens, and temperature unless reasoning_effort is 'none' (a 400, so
+ * every search would silently lose its translation); other efforts also spend ~60 reasoning tokens
+ * of the 120 cap. Temperature 0 keeps a query's translation stable across cache misses.
  * gpt-4* keeps the old shape so QUERY_TRANSLATE_MODEL can still roll back.
  */
 export function translationParams(model: string) {
   return model.startsWith('gpt-4')
     ? { temperature: 0, max_tokens: 120 }
-    : { max_completion_tokens: 120, reasoning_effort: 'none' as const };
+    : { temperature: 0, max_completion_tokens: 120, reasoning_effort: 'none' as const };
 }
 
 /**
@@ -95,6 +136,8 @@ export async function translateQueryToEnglish(text: string): Promise<string | nu
 
 async function translateUncached(text: string, model: string): Promise<string | null> {
   try {
+    // The app's function translates with gpt-6-luna; the edge hop adds ~0.1-0.2 s to the 4 s budget.
+    if (viaApp()) return (await appAi<{ text: string | null }>({ mode: 'translate', text: text.slice(0, 500) }, 5000)).text ?? null;
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 4000, maxRetries: 0 });
     const t0 = Date.now();
     const res = await openai.chat.completions.create({

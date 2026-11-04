@@ -30,6 +30,7 @@ import { createInFlightTracker, createGracefulShutdown } from './lib/shutdown.js
 import { asyncHandler, jsonErrorHandler, installProcessHandlers, sendInternalError } from './lib/async-handler.js';
 import type { AuthContext } from './types.js';
 import { requestedProfile } from './tool-profiles.js';
+import { checkFeatureTags } from './security/feature-filter.js';
 
 // Resolve package.json relative to this file so /health reports the actual
 // shipped version. Built file lives at dist/index.js, source at src/index.ts —
@@ -514,6 +515,8 @@ const httpServer = app.listen(PORT, '0.0.0.0', () => {
   console.error(`MCP:      http://localhost:${PORT}/mcp`);
   console.error(`MCP URL:  http://localhost:${PORT}/mcp-url`);
   console.error(`Obsidian: http://localhost:${PORT}/api/obsidian-sync`);
+  // MCP_FEATURE_FILTER shadow/enforce: every tool feature tag must exist in feature_flags.
+  void checkFeatureTags();
 });
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────

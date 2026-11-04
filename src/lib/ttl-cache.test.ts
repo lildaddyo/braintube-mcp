@@ -2,6 +2,8 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.OPENAI_API_KEY = ['fixture', 'openai', 'key'].join('-');
+// These tests mock api.openai.com; the via-app path has its own test (openai-via-app.test.ts).
+process.env.OPENAI_VIA_APP = 'off';
 
 const { TtlCache, normaliseQuery, hashKey, cacheStats, clearCaches } = await import('./ttl-cache.js');
 const { generateEmbedding, translateQueryToEnglish } = await import('./openai.js');
