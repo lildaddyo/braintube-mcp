@@ -44,6 +44,11 @@ export function withUsageContext<T>(ctx: UsageContext, fn: () => T): T {
   return store.run(ctx, fn);
 }
 
+/** The caller's user and tool, for calls whose cost row is written elsewhere (the app's mcp-ai function). */
+export function currentUsageContext(): UsageContext | undefined {
+  return store.getStore();
+}
+
 export interface UsageRow {
   model: string;
   inputTokens: number;

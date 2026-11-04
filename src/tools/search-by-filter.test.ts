@@ -8,6 +8,8 @@ import assert from 'node:assert/strict';
 process.env.SUPABASE_URL = 'http://supabase.test';
 process.env.SUPABASE_SERVICE_ROLE_KEY = ['fixture', 'service', 'role'].join('-');
 process.env.OPENAI_API_KEY = ['fixture', 'openai', 'key'].join('-');
+// These tests mock api.openai.com; the via-app path (D-211) is covered in lib/openai-via-app.test.ts.
+process.env.OPENAI_VIA_APP = 'off';
 
 const { searchBySource } = await import('./search-by-source.js');
 const { searchByDate } = await import('./search-by-date.js');
