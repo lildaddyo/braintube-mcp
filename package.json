@@ -16,7 +16,7 @@
     "@notionhq/client": "^5.27.0",
     "@supabase/supabase-js": "^2.117.3",
     "express": "^4.22.2",
-    "express-rate-limit": "^8.7.1",
+    "express-rate-limit": "^8.7.3",
     "helmet": "^8.1.0",
     "openai": "^7.32.0",
     "zod": "^4.6.7"
