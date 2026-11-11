@@ -12,7 +12,7 @@
     "test:coverage": "tsx --test --experimental-test-coverage \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@notionhq/client": "^5.27.0",
     "@supabase/supabase-js": "^2.117.3",
     "express": "^4.22.2",
