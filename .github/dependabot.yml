@@ -12,3 +12,7 @@ updates:
       # Keep major version upgrades manual — only auto-bump patch/minor
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # 5.31.x drops the named ESM export `Client` (import fails at startup,
+      # CI on #113). Re-try when a later release ships.
+      - dependency-name: "@notionhq/client"
+        versions: [">=5.31.0 <5.32.0"]
