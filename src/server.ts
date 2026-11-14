@@ -144,6 +144,12 @@ export function buildMcpServer(
     { instructions: SERVER_INSTRUCTIONS },
   );
 
+  // Per-key / per-client metering for every audit row this session writes.
+  const auditMeta = { apiKeyId: auth.apiKeyId, client: auth.client, authMethod: auth.authMethod };
+  // A read-scoped API key sees and calls only read-only tools (TOOL_ANNOTATIONS readOnlyHint).
+  const scopeAllows = (toolName: string): boolean =>
+    auth.keyScope !== 'read' || TOOL_ANNOTATIONS[toolName]?.readOnlyHint === true;
+
   // ══════════════════════════════════════════════════════════════════════════════
   //  Security Infrastructure — applied to EVERY tool registration below
   //  via a proxy on server.registerTool.
@@ -271,7 +277,7 @@ export function buildMcpServer(
       const requiredTier = getRequiredTier(toolName);
       if (!tierGrantsAccess(userRole, requiredTier)) {
         logAccessDenied(auth.userId, toolName, requiredTier, userRole);
-        auditLog(auth.userId, toolName, input, false);
+        auditLog(auth.userId, toolName, input, false, auditMeta);
         return shortCircuitResult(
           'access_denied',
           `[ACCESS DENIED] Tool \`${toolName}\` requires \`${requiredTier}\` access. Your role: \`${userRole}\`. This tool is reserved for BrainTube administrators.`
@@ -284,10 +290,20 @@ export function buildMcpServer(
       // and because the router (braintube_run_tool) and crafted requests reach
       // handlers through this wrapper. Shadow mode logs and lets the call through.
       if (!await featureAllowsNow(features, auth.userId, toolName)) {
-        auditLog(auth.userId, toolName, input, false);
+        auditLog(auth.userId, toolName, input, false, auditMeta);
         return shortCircuitResult(
           'access_denied',
           `[ACCESS DENIED] Tool \`${toolName}\` is not available on your account.`
+        );
+      }
+
+      // ── 0c. Key scope: a read-only key never runs a write tool ───────────────
+      // Re-checked here because the router (braintube_run_tool) reaches handlers through this wrapper.
+      if (!scopeAllows(toolName)) {
+        auditLog(auth.userId, toolName, input, false, auditMeta);
+        return shortCircuitResult(
+          'access_denied',
+          `[ACCESS DENIED] Tool \`${toolName}\` changes data and this API key is read-only. Use a full-access key or sign in with OAuth.`
         );
       }
 
@@ -318,7 +334,7 @@ export function buildMcpServer(
           preview,
         );
         if (!outcome.ok) {
-          auditLog(auth.userId, toolName, input, false);
+          auditLog(auth.userId, toolName, input, false, auditMeta);
           return shortCircuitResult(outcome.status, outcome.message);
         }
       }
@@ -333,7 +349,7 @@ export function buildMcpServer(
         success = false;
         throw err;
       } finally {
-        auditLog(auth.userId, toolName, input, success);
+        auditLog(auth.userId, toolName, input, success, auditMeta);
       }
 
       // ── 4. Untrusted-content envelope ──────────────────────────────────────
@@ -391,6 +407,9 @@ export function buildMcpServer(
       console.error(`[rbac] skipping registration of "${name}" (requires ${requiredTier}, user has ${userRole})`);
       return;
     }
+
+    // ── Key scope: read-only keys don't see write tools ─────────────────────
+    if (!scopeAllows(name)) return;
 
     // ── Feature filter (L5): hidden tools are neither listed nor routable ────
     if (!featureAllows(features, auth.userId, name, 'register')) return;

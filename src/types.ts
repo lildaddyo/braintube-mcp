@@ -48,4 +48,10 @@ export interface AuthContext {
   email?: string;
   authMethod: 'jwt' | 'apikey';
   rawToken?: string;
+  /** api_keys.id when authMethod is 'apikey' (per-key metering). */
+  apiKeyId?: string;
+  /** 'read' keys only see and call read-only tools; absent or 'full' = everything. */
+  keyScope?: 'read' | 'full';
+  /** Normalised MCP client label (src/lib/client-id.ts). */
+  client?: string;
 }
