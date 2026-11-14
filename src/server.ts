@@ -1264,6 +1264,9 @@ export function buildMcpServer(
         const fail = (text: string) => ({ content: [{ type: 'text' as const, text }], isError: true });
         const entry = routable.get(input.name);
         if (!entry) {
+          if (!scopeAllows(input.name)) {
+            return fail(`\`${input.name}\` changes data and this API key is read-only. Use a full-access key or sign in with OAuth.`);
+          }
           if (CORE_TOOLS.has(input.name) || ROUTER_TOOLS.has(input.name)) {
             return fail(`\`${input.name}\` is already in your tool list: call it directly.`);
           }

@@ -53,9 +53,10 @@ test('read-scoped key cannot reach a write tool through the router', async () =>
   try {
     const listed = (await s.client.listTools()).tools.map((t) => t.name);
     if (!listed.includes('braintube_run_tool')) return; // router hidden: nothing to reach
-    const res = await s.client.callTool({ name: 'braintube_run_tool', arguments: { tool: 'add_note', arguments: { item_id: USER, note: 'x' } } });
+    const res = await s.client.callTool({ name: 'braintube_run_tool', arguments: { name: 'add_note', args: { item_id: USER, note: 'x' } } });
     const text = JSON.stringify(res);
-    assert.ok(res.isError === true || /not|denied|read-only|unknown|full/i.test(text), text.slice(0, 300));
+    assert.equal(res.isError, true);
+    assert.match(text, /read-only/, text.slice(0, 300));
   } finally { await s.close(); }
 });
 
