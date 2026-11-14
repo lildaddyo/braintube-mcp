@@ -1452,7 +1452,7 @@ test('src/index.ts registers the 5 MB parser before the global parser, and the r
   const src = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
   const early = src.indexOf("app.post('/api/session-ingest', requireAuth, sessionIngestBodyParser)");
   const globalParser = src.indexOf('app.use(express.json())');
-  const apiLayer = src.indexOf("app.use('/api', requireAuth, mcpRateLimit, mcpDailyLimit, apiScopeAndMeter, restRouter)");
+  const apiLayer = src.indexOf("app.use('/api', requireAuth, mcpRateLimit, mcpDailyLimit, apiKeyScope, restRouter)");
   const mount = src.indexOf("app.use('/api/session-ingest', sessionIngestRouter)");
   assert.ok(early !== -1 && globalParser !== -1 && apiLayer !== -1 && mount !== -1, 'a registration line is missing');
   assert.ok(early < globalParser, 'the 5 MB parser must come before express.json()');
