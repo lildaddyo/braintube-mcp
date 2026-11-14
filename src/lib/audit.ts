@@ -13,6 +13,12 @@
 import { createHash } from 'crypto';
 import { dbAdmin } from '../db/supabase.js';
 
+export interface AuditMeta {
+  apiKeyId?: string;
+  client?: string;
+  authMethod?: string;
+}
+
 /**
  * Fire-and-forget: logs one tool invocation row to mcp_audit_log.
  * Never throws, never awaited — a write failure here must not surface to the user.
@@ -21,7 +27,8 @@ export function auditLog(
   userId:   string,
   toolName: string,
   params:   unknown,
-  success:  boolean
+  success:  boolean,
+  meta:     AuditMeta = {}
 ): void {
   const paramsHash = createHash('sha256')
     .update(JSON.stringify(params))
@@ -34,6 +41,10 @@ export function auditLog(
       tool_name:   toolName,
       params_hash: paramsHash,
       success,
+      // Per-key and per-client metering (usage page, developer limits).
+      api_key_id:  meta.apiKeyId ?? null,
+      client:      meta.client ?? null,
+      auth_method: meta.authMethod ?? null,
     })
     .then(({ error }) => {
       if (error) console.error('[audit] log write failed (non-fatal):', error.message);

@@ -22,6 +22,29 @@ export interface AuthContext {
   email?: string;
   authMethod: 'jwt' | 'apikey';
   rawToken?: string; // original JWT — forwarded to edge functions that require user auth
+  /** api_keys.id when authMethod is 'apikey': per-key metering in mcp_audit_log. */
+  apiKeyId?: string;
+  /** 'read' keys only see and call read-only tools; 'full' (default) keys see everything. */
+  keyScope?: KeyScope;
+  /** Normalised MCP client label (src/lib/client-id.ts), set when the session is created. */
+  client?: string;
+}
+
+export type KeyScope = 'read' | 'full';
+
+/** A key row is usable when it exists and has not expired. Exported for tests. */
+export function keyRowToAuth(
+  row: { id?: string; user_id?: string; scope?: string | null; expires_at?: string | null } | null | undefined,
+  now: Date = new Date(),
+): AuthContext | null {
+  if (!row?.user_id) return null;
+  if (row.expires_at && new Date(row.expires_at).getTime() <= now.getTime()) return null;
+  return {
+    userId: row.user_id,
+    authMethod: 'apikey',
+    apiKeyId: row.id,
+    keyScope: row.scope === 'read' ? 'read' : 'full',
+  };
 }
 
 // Validate a Supabase JWT via the Auth API (no local JWT secret needed).
@@ -68,12 +91,13 @@ async function validateApiKey(apiKey: string): Promise<AuthContext | null> {
     const hash = createHash('sha256').update(apiKey).digest('hex');
     const { data } = await getAdminClient()
       .from('api_keys')
-      .select('user_id')
+      .select('id, user_id, scope, expires_at')
       .eq('key_hash', hash)
       .eq('is_active', true)
       .abortSignal(AbortSignal.timeout(TIMEOUTS.apiKeyLookupMs))
       .single();
-    if (!data?.user_id) return null;
+    const ctx = keyRowToAuth(data);
+    if (!ctx) return null;
     // Fire-and-forget last_used update
     void getAdminClient()
       .from('api_keys')
@@ -87,8 +111,8 @@ async function validateApiKey(apiKey: string): Promise<AuthContext | null> {
           console.error(`[auth] last_used update threw for key hash ${hash.slice(0, 8)}…: ${err instanceof Error ? err.message : String(err)}`);
         }
       );
-    console.error('[auth] api key validated');
-    return { userId: data.user_id as string, authMethod: 'apikey' };
+    console.error(`[auth] api key validated (${ctx.keyScope})`);
+    return ctx;
   } catch {
     return null;
   }

@@ -31,6 +31,9 @@ import { asyncHandler, jsonErrorHandler, installProcessHandlers, sendInternalErr
 import type { AuthContext } from './types.js';
 import { requestedProfile } from './tool-profiles.js';
 import { checkFeatureTags } from './security/feature-filter.js';
+import { auditLog } from './lib/audit.js';
+import { limitsFor } from './lib/plan-limits.js';
+import { classifyClient, initializeClientName, restRouteLabel } from './lib/client-id.js';
 
 // Resolve package.json relative to this file so /health reports the actual
 // shipped version. Built file lives at dist/index.js, source at src/index.ts —
@@ -83,16 +86,54 @@ const PORT = parseInt(process.env.PORT ?? '3000', 10);
 // Keyed on userId so each user gets their own independent bucket.
 // 60 tool calls per user per 15-minute rolling window.
 // Auth middleware always runs first, so auth.userId is present when limit fires.
+// Limits come from the caller's plan (src/lib/plan-limits.ts → public.mcp_limits_for);
+// plans without MCP limits keep 60 calls / 15 min and no daily cap. Per user, across all their
+// keys and OAuth sessions. Counters are in memory, so a deploy resets them.
+type AuthedReq = express.Request & { auth?: AuthContext };
 const mcpRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,   // 15 minutes
-  limit: 60,                   // 60 tool calls per window per user
-  keyGenerator: (req) => (req as express.Request & { auth?: AuthContext }).auth?.userId ?? 'unauthenticated',
-  skip: (req) => !(req as express.Request & { auth?: AuthContext }).auth,
+  limit: async (req) => (await limitsFor((req as AuthedReq).auth?.userId)).per15m,
+  keyGenerator: (req) => (req as AuthedReq).auth?.userId ?? 'unauthenticated',
+  skip: (req) => !(req as AuthedReq).auth,
   validate: { xForwardedForHeader: false },
-  message: { error: 'Rate Limited', message: 'Rate limit: 60 tool calls per 15 minutes per user. Please wait before retrying.' },
+  message: async (req: express.Request) => {
+    const l = await limitsFor((req as AuthedReq).auth?.userId);
+    return { error: 'Rate Limited', message: `Rate limit: ${l.per15m} tool calls per 15 minutes on your plan. Please wait before retrying.`, upgrade: 'https://app.brain-tube.com/pricing' };
+  },
   standardHeaders: true,   // sends RateLimit-* headers so clients can back off
   legacyHeaders: false
 });
+
+// Daily cap, only for plans that set limits.mcp_calls_per_day.
+const mcpDailyLimit = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  limit: async (req) => (await limitsFor((req as AuthedReq).auth?.userId)).perDay ?? Number.MAX_SAFE_INTEGER,
+  keyGenerator: (req) => (req as AuthedReq).auth?.userId ?? 'unauthenticated',
+  skip: async (req) => !(req as AuthedReq).auth || (await limitsFor((req as AuthedReq).auth?.userId)).perDay === null,
+  validate: { xForwardedForHeader: false },
+  message: async (req: express.Request) => {
+    const l = await limitsFor((req as AuthedReq).auth?.userId);
+    return { error: 'Rate Limited', message: `Daily limit: ${l.perDay} tool calls per day on your plan. Try again tomorrow.`, upgrade: 'https://app.brain-tube.com/pricing' };
+  },
+  standardHeaders: false,
+  legacyHeaders: false
+});
+
+// REST (/api/*) scope + metering: a read-only key may only GET; every API call writes one
+// mcp_audit_log row (tool 'rest:<METHOD> <path>') so the usage page counts REST like MCP.
+function apiScopeAndMeter(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const auth = (req as AuthedReq).auth;
+  if (!auth) { next(); return; }
+  const tool = `rest:${req.method} ${restRouteLabel(req.path)}`;
+  const meta = { apiKeyId: auth.apiKeyId, client: classifyClient(undefined, req.headers['user-agent']) === 'unknown' ? 'rest' : classifyClient(undefined, req.headers['user-agent']), authMethod: auth.authMethod };
+  if (auth.keyScope === 'read' && req.method !== 'GET') {
+    auditLog(auth.userId, tool, {}, false, meta);
+    res.status(403).json({ error: 'Forbidden', message: 'This API key is read-only. Use a full-access key to change data.' });
+    return;
+  }
+  res.once('finish', () => auditLog(auth.userId, tool, {}, res.statusCode < 400, meta));
+  next();
+}
 
 // Extension capture runs a paid LLM summary per call and is free to the user, so it also
 // gets a daily ceiling: 100 captures per user per 24 h (~$1.50 worst case at Haiku 4.5).
@@ -174,7 +215,7 @@ app.get('/openapi.json', (req, res) => {
 // All routes require auth + rate limiting (applied here, not in the router itself).
 // Existing specific /api/* routes (extension-ingest, backfill, obsidian-sync)
 // are registered after and take precedence for their exact paths.
-app.use('/api', requireAuth, mcpRateLimit, restRouter);
+app.use('/api', requireAuth, mcpRateLimit, mcpDailyLimit, apiScopeAndMeter, restRouter);
 
 // Session archive ingest: POST /api/session-ingest and GET /api/session-ingest/cursor.
 // Registered after the /api layer above, so requireAuth + mcpRateLimit have already run and req.auth is set
@@ -224,7 +265,7 @@ setInterval(() => {
 // Origin validation (DNS-rebinding guard) runs before auth on every /mcp method.
 app.use('/mcp', validateMcpOrigin);
 
-app.post('/mcp', requireAuth, mcpRateLimit, asyncHandler('mcp', async (req, res) => {
+app.post('/mcp', requireAuth, mcpRateLimit, mcpDailyLimit, asyncHandler('mcp', async (req, res) => {
   const auth = (req as express.Request & { auth: AuthContext }).auth;
 
   // Re-use an existing session if the client provides Mcp-Session-Id.
@@ -263,13 +304,15 @@ app.post('/mcp', requireAuth, mcpRateLimit, asyncHandler('mcp', async (req, res)
     }
   };
 
+  // Which client opened the session (clientInfo.name, else User-Agent), for per-client usage.
+  auth.client = classifyClient(initializeClientName(req.body), req.headers['user-agent']);
   // ?tools=full / X-BrainTube-Tools pick the tool profile for this session (src/tool-profiles.ts).
   const server = await createMcpServer(auth, { profile: requestedProfile(req.query, req.headers) });
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 }, 'jsonrpc'));
 
-app.get('/mcp', mcpBrowserLanding, requireAuth, mcpRateLimit, asyncHandler('mcp', async (req, res) => {
+app.get('/mcp', mcpBrowserLanding, requireAuth, mcpRateLimit, mcpDailyLimit, asyncHandler('mcp', async (req, res) => {
   // GET is used by clients that open a persistent SSE stream for server→client pushes.
   const auth = (req as express.Request & { auth: AuthContext }).auth;
   const incomingSessionId = req.headers['mcp-session-id'] as string | undefined;
