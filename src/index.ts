@@ -31,9 +31,8 @@ import { asyncHandler, jsonErrorHandler, installProcessHandlers, sendInternalErr
 import type { AuthContext } from './types.js';
 import { requestedProfile } from './tool-profiles.js';
 import { checkFeatureTags } from './security/feature-filter.js';
-import { auditLog } from './lib/audit.js';
 import { limitsFor } from './lib/plan-limits.js';
-import { classifyClient, initializeClientName, restRouteLabel } from './lib/client-id.js';
+import { classifyClient, initializeClientName } from './lib/client-id.js';
 
 // Resolve package.json relative to this file so /health reports the actual
 // shipped version. Built file lives at dist/index.js, source at src/index.ts —
@@ -119,19 +118,15 @@ const mcpDailyLimit = rateLimit({
   legacyHeaders: false
 });
 
-// REST (/api/*) scope + metering: a read-only key may only GET; every API call writes one
-// mcp_audit_log row (tool 'rest:<METHOD> <path>') so the usage page counts REST like MCP.
-function apiScopeAndMeter(req: express.Request, res: express.Response, next: express.NextFunction) {
+// REST (/api/*) key scope: a read-only key may only GET. REST calls are NOT written to mcp_audit_log:
+// activation (mcp_connected), trial usage and analytics read that table as MCP use, so an extension
+// save or Obsidian sync would count as an MCP connection. REST metering gets its own table later.
+function apiKeyScope(req: express.Request, res: express.Response, next: express.NextFunction) {
   const auth = (req as AuthedReq).auth;
-  if (!auth) { next(); return; }
-  const tool = `rest:${req.method} ${restRouteLabel(req.path)}`;
-  const meta = { apiKeyId: auth.apiKeyId, client: classifyClient(undefined, req.headers['user-agent']) === 'unknown' ? 'rest' : classifyClient(undefined, req.headers['user-agent']), authMethod: auth.authMethod };
-  if (auth.keyScope === 'read' && req.method !== 'GET') {
-    auditLog(auth.userId, tool, {}, false, meta);
+  if (auth?.keyScope === 'read' && req.method !== 'GET') {
     res.status(403).json({ error: 'Forbidden', message: 'This API key is read-only. Use a full-access key to change data.' });
     return;
   }
-  res.once('finish', () => auditLog(auth.userId, tool, {}, res.statusCode < 400, meta));
   next();
 }
 
@@ -215,7 +210,7 @@ app.get('/openapi.json', (req, res) => {
 // All routes require auth + rate limiting (applied here, not in the router itself).
 // Existing specific /api/* routes (extension-ingest, backfill, obsidian-sync)
 // are registered after and take precedence for their exact paths.
-app.use('/api', requireAuth, mcpRateLimit, mcpDailyLimit, apiScopeAndMeter, restRouter);
+app.use('/api', requireAuth, mcpRateLimit, mcpDailyLimit, apiKeyScope, restRouter);
 
 // Session archive ingest: POST /api/session-ingest and GET /api/session-ingest/cursor.
 // Registered after the /api layer above, so requireAuth + mcpRateLimit have already run and req.auth is set
