@@ -245,9 +245,18 @@ const mcpSessions = new SessionStore<StreamableHTTPServerTransport>({
   },
 });
 
-/** The live transport for this session id, only if `userId` is the user who created it. */
-function ownedSession(sessionId: string, userId: string): StreamableHTTPServerTransport | undefined {
-  return mcpSessions.get(sessionId, userId);
+/**
+ * Who may use a session: the same user AND the same credential (method, key id, scope).
+ * The tool filter is fixed when the session is created, so a read-only key must never reuse
+ * a session opened by OAuth or a full key (formal verification INV-KEY-1, finding F3).
+ */
+function sessionOwner(auth: AuthContext): string {
+  return [auth.userId, auth.authMethod ?? '', auth.apiKeyId ?? '', auth.keyScope ?? 'full'].join('|');
+}
+
+/** The live transport for this session id, only if this credential created it. */
+function ownedSession(sessionId: string, auth: AuthContext): StreamableHTTPServerTransport | undefined {
+  return mcpSessions.get(sessionId, sessionOwner(auth));
 }
 
 setInterval(() => {
@@ -267,7 +276,7 @@ app.post('/mcp', requireAuth, mcpRateLimit, mcpDailyLimit, asyncHandler('mcp', a
   // Express lower-cases incoming headers, so the key is 'mcp-session-id'.
   const incomingSessionId = req.headers['mcp-session-id'] as string | undefined;
   if (incomingSessionId) {
-    const existing = ownedSession(incomingSessionId, auth.userId);
+    const existing = ownedSession(incomingSessionId, auth);
     if (existing) {
       // In flight until the response closes: the idle sweep never evicts a session mid-call.
       res.once('close', mcpSessions.begin(incomingSessionId));
@@ -287,7 +296,7 @@ app.post('/mcp', requireAuth, mcpRateLimit, mcpDailyLimit, asyncHandler('mcp', a
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (sessionId) => {
-      mcpSessions.set(sessionId, transport, auth.userId);
+      mcpSessions.set(sessionId, transport, sessionOwner(auth));
       console.error(`[mcp] session created (${shortId(sessionId)}…) — ${mcpSessions.size} active`);
     },
   });
@@ -312,7 +321,7 @@ app.get('/mcp', mcpBrowserLanding, requireAuth, mcpRateLimit, mcpDailyLimit, asy
   const auth = (req as express.Request & { auth: AuthContext }).auth;
   const incomingSessionId = req.headers['mcp-session-id'] as string | undefined;
   if (incomingSessionId) {
-    const existing = ownedSession(incomingSessionId, auth.userId);
+    const existing = ownedSession(incomingSessionId, auth);
     if (existing) {
       // An open SSE stream keeps the session live until the client disconnects.
       res.once('close', mcpSessions.begin(incomingSessionId));
