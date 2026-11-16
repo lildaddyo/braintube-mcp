@@ -456,3 +456,14 @@ test('detector signal report (informational)', () => {
   if (s.benign.flaggedTexts.length) console.log(`[corpus] benign flagged: ${s.benign.flaggedTexts.join(' | ')}`);
   assert.ok(true);
 });
+
+test('F-6: a structured result that cannot be enveloped is withheld, never returned raw', async () => {
+  const { withholdUnenveloped } = await import('./untrusted-envelope.js');
+  const strict = { safeParse: () => ({ success: false }) };
+  const r = envelopeToolResult({ content: [{ type: 'text', text: POISON }], structuredContent: { text: POISON } }, strict as never);
+  assert.equal(r.structured, 'unchanged');
+  const out = withholdUnenveloped(r.result);
+  assert.equal(out.structuredContent, undefined);
+  assert.equal(out.isError, true);
+  assert.ok(out.content!.slice(1).every((b) => (b.text ?? '').startsWith(ENVELOPE_NOTE) || !(b.text ?? '').includes(POISON)));
+});

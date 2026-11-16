@@ -73,15 +73,31 @@ export const firewallPromoteCheckOutputSchema = z.object({
   error: z.string().optional(),
 }).passthrough();
 
+/**
+ * The active rules of one type together with their version, so the write can be a
+ * compare-and-swap (formal verification INV-TAINT-4, CX-4): a concurrent change makes
+ * snapshot_firewall_rules raise instead of silently undoing the other admin's edit.
+ */
+async function readActiveRules(ruleType: string): Promise<{ version: number; rules: unknown } | null> {
+  const { data } = await dbAdmin
+    .from('firewall_rule_versions')
+    .select('version, rules_snapshot')
+    .eq('rule_type', ruleType)
+    .eq('active', true)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data ? { version: data.version as number, rules: data.rules_snapshot } : null;
+}
+
 export async function firewallPromoteCheck(
   input: z.infer<typeof firewallPromoteCheckSchema>
 ): Promise<{ content: Array<{ type: 'text'; text: string }>; structuredContent: Record<string, unknown> }> {
   const { check_name, action } = input;
 
   // Get current shadow config snapshot
-  const { data: currentConfig } = await dbAdmin.rpc('get_active_firewall_rules', {
-    p_rule_type: 'shadow_config',
-  });
+  const active = await readActiveRules('shadow_config');
+  const currentConfig = active?.rules;
 
   if (!currentConfig) {
     return {
@@ -108,6 +124,7 @@ export async function firewallPromoteCheck(
     p_rules:       newConfig,
     p_description: `${action === 'promote' ? 'Promoted' : 'Demoted'} "${check_name}" — ${action === 'promote' ? 'now enforcing' : 'now shadow only'}`,
     p_changed_by:  'mcp_admin',
+    p_expected_version: active!.version,
   });
 
   if (error) {
@@ -158,9 +175,8 @@ export async function firewallUpdateThreshold(
   const { threshold_name, new_value, reason } = input;
 
   // Get current thresholds snapshot
-  const { data: currentThresholds } = await dbAdmin.rpc('get_active_firewall_rules', {
-    p_rule_type: 'thresholds',
-  });
+  const activeT = await readActiveRules('thresholds');
+  const currentThresholds = activeT?.rules;
 
   if (!currentThresholds) {
     return {
@@ -181,6 +197,7 @@ export async function firewallUpdateThreshold(
     p_rules:       thresholds,
     p_description: `${threshold_name}: ${oldValue} → ${new_value}. Reason: ${reason}`,
     p_changed_by:  'mcp_admin',
+    p_expected_version: activeT!.version,
   });
 
   if (error) {
