@@ -78,7 +78,7 @@ import { requireCredits, requireFairUse } from './lib/credits.js';
 import { dbAdmin } from './db/supabase.js';
 import { detectInjection, logInjectionAttempt } from './security/injection.js';
 import { HUMAN_CONFIRM_REQUIRED, requestHumanConfirmation } from './security/human-confirm.js';
-import { envelopeToolResult, returnsSavedContent } from './security/untrusted-envelope.js';
+import { envelopeToolResult, returnsSavedContent, withholdUnenveloped } from './security/untrusted-envelope.js';
 import { auditLog } from './lib/audit.js';
 import { sanitizeToolDescription, auditToolDescriptions } from './security/sanitize-tool-metadata.js';
 import type { ToolMeta } from './security/sanitize-tool-metadata.js';
@@ -369,7 +369,9 @@ export function buildMcpServer(
         }
         const { result: enveloped, structured } = envelopeToolResult(typedResult, outputSchemas.get(toolName));
         if (structured === 'unchanged') {
-          console.error(`[envelope] ${toolName}: structuredContent kept unenveloped (outputSchema rejects both envelope modes); text block is enveloped`);
+          // Fail closed (formal verification F-6): never hand out saved content un-enveloped.
+          console.error(`[envelope] ${toolName}: structuredContent withheld (outputSchema rejects both envelope modes); returning enveloped text only`);
+          return withholdUnenveloped(enveloped);
         }
         return enveloped;
       }

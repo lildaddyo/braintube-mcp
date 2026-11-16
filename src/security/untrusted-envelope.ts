@@ -227,3 +227,21 @@ export function envelopeToolResult(
     structured,
   };
 }
+
+/**
+ * F-6: when structured output could not be enveloped, drop it and return the (already
+ * enveloped) text as an error result. isError results need no structuredContent, so the
+ * MCP SDK accepts this; the client sees a clear failure instead of raw untrusted data.
+ */
+export function withholdUnenveloped(result: ToolResultLike): ToolResultLike {
+  const { structuredContent: _dropped, ...rest } = result;
+  return {
+    ...rest,
+    isError: true,
+    content: [
+      { type: 'text', text: 'Structured result withheld: it could not be marked as untrusted data. The text below is the same result, enveloped.' },
+      ...(result.content ?? []),
+    ],
+  };
+}
+
