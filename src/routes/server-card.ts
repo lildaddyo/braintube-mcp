@@ -19,6 +19,7 @@ import { z } from 'zod';
 
 import { searchSchema, searchKnowledgeOutputSchema } from '../tools/search.js';
 import { videoSchema, getVideoOutputSchema } from '../tools/video.js';
+import { grepSchema, grepOutputSchema } from '../tools/grep.js';
 import { chatgptSearchSchema, chatgptSearchOutputSchema, chatgptFetchSchema, chatgptFetchOutputSchema } from '../tools/chatgpt-compat.js';
 import { recentSchema, listRecentOutputSchema } from '../tools/recent.js';
 import { statsSchema, getStatsOutputSchema } from '../tools/stats.js';
@@ -153,9 +154,16 @@ const CARD_TOOLS = [
   },
   {
     name: 'fetch',
-    description: 'Fetch the full text of one saved BrainTube item by the id that search returned: summary, key takeaways, description and transcript, plus its source URL.',
+    description: RETRIEVAL_DESCRIPTIONS.fetch,
     inputSchema: toInputSchema(chatgptFetchSchema),
     outputSchema: toOutputSchema(chatgptFetchOutputSchema),
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'grep',
+    description: RETRIEVAL_DESCRIPTIONS.grep,
+    inputSchema: toInputSchema(grepSchema),
+    outputSchema: toOutputSchema(grepOutputSchema),
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {

@@ -56,6 +56,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolAnnotationEntry> = {
   get_video:                read('Get Saved Item'),
   search:                   read('Search Library'),
   fetch:                    read('Fetch Item Text'),
+  grep:                     read('Find Exact Text'),
   get_related:              read('Find Related Items'),
   list_recent:              read('List Recent Saves'),
   list_bookmarks:           read('List Bookmarks'),

@@ -32,7 +32,7 @@ const CONTENT_KEY_SET = new Set<string>(CONTENT_KEYS);
  * so they travel inside the item's own envelope: one trust label per result, not one per passage (2026-11-19; each
  * moment quote used to get its own label or its own ~290-character text envelope).
  */
-export const CHILD_LIST_KEYS = ['passages', 'moments'] as const;
+export const CHILD_LIST_KEYS = ['passages', 'moments', 'matches'] as const;
 const CHILD_LIST_KEY_SET = new Set<string>(CHILD_LIST_KEYS);
 
 /**

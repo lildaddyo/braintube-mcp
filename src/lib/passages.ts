@@ -108,3 +108,38 @@ export function pickPassages(
   }
   return out;
 }
+
+const STOP = new Set(['the', 'and', 'for', 'that', 'with', 'this', 'from', 'what', 'which', 'how', 'does', 'did', 'are', 'was', 'were', 'has', 'have', 'had', 'you', 'your', 'about', 'into', 'than', 'then', 'they', 'their', 'not', 'but', 'can', 'its', 'who', 'why', 'when', 'where']);
+
+/** Lower-cased content words of a query (3+ characters, no stop words), for the window score below. */
+export function queryTerms(query: string): string[] {
+  const words = query.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [];
+  return [...new Set(words.filter(w => !STOP.has(w)))];
+}
+
+/**
+ * Passages for an item that has no stored segments (short notes, captions, a few papers): windows of its own text,
+ * the ones holding the most query words first. A text that fits one passage is returned whole. No position: these
+ * windows are not segments, so they cannot be passed to fetch as from_passage.
+ */
+export function fallbackPassages(text: string, query: string, max: number = MAX_PASSAGES_TAIL): Passage[] {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (!clean || max <= 0) return [];
+  if (clean.length <= PASSAGE_CHARS) return [{ text: shortQuote(clean, PASSAGE_CHARS) }];
+  const size = 500;
+  const windows: string[] = [];
+  for (let at = 0; at < clean.length;) {
+    let end = Math.min(clean.length, at + size);
+    if (end < clean.length) { const sp = clean.lastIndexOf(' ', end); if (sp > at + size * 0.6) end = sp; }
+    windows.push(clean.slice(at, end).trim());
+    at = end;
+  }
+  const terms = queryTerms(query);
+  const scored = windows.map((w, i) => {
+    const low = w.toLowerCase();
+    return { w, i, score: terms.reduce((n, t) => n + (low.includes(t) ? 1 : 0), 0) };
+  });
+  // Best windows first; with no query word anywhere the opening of the text is the passage.
+  const best = scored.sort((a, b) => (b.score - a.score) || (a.i - b.i)).slice(0, max).filter((x, k) => x.score > 0 || k === 0);
+  return best.map(x => ({ text: shortQuote(x.w, PASSAGE_CHARS) }));
+}

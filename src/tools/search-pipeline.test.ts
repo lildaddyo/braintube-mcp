@@ -36,6 +36,8 @@ type Fake = {
   segmentIndex: Array<{ id: string; segment_index: number }>;
   coreFails: boolean;
   recall: Array<Record<string, unknown>>;
+  texts: Array<Record<string, unknown>>;
+  oneItem: Array<Record<string, unknown>>;
   neighbours: Array<Record<string, unknown>>;
 };
 let fake: Fake;
@@ -68,7 +70,12 @@ function route(url: URL, body: any): Response {
   if (p === '/rest/v1/transcript_segments') return json(url.searchParams.has('item_id') ? fake.neighbours : fake.segmentIndex);
   if (p === '/rest/v1/rpc/increment_retrieval_stats') return new Response(null, { status: 204 });
   if (p === '/rest/v1/retrieval_log' || p === '/rest/v1/mcp_retrieval_log') return new Response(null, { status: 201 });
-  if (p === '/rest/v1/items') return json(fake.items);
+  if (p === '/rest/v1/items') {
+    const sel = url.searchParams.get('select') ?? '';
+    if (sel.includes('full_transcript')) return json(fake.texts);     // stored text of results without segments
+    if (sel.includes('provenance')) return json(fake.oneItem);        // search inside one item
+    return json(fake.items);
+  }
   if (p === '/functions/v1/jev-rerank') {
     if (fake.rerank === 'fail') return json({ error: 'boom' }, 500);
     const scores = fake.rerank(body.query, body.passages.map((x: any) => x.id));
@@ -80,7 +87,7 @@ function route(url: URL, body: any): Response {
 beforeEach(() => {
   clearCaches();
   for (const k of ENV_KEYS) { savedEnv[k] = process.env[k]; delete process.env[k]; }
-  fake = { calls: [], adaptive: () => [], phrases: [], items: [], window: () => [], translation: null, rerank: 'fail', segments: {}, segmentIndex: [], coreFails: false, recall: [], neighbours: [] };
+  fake = { calls: [], adaptive: () => [], phrases: [], items: [], window: () => [], translation: null, rerank: 'fail', segments: {}, segmentIndex: [], coreFails: false, recall: [], neighbours: [], texts: [], oneItem: [] };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     const raw = init?.body ?? (input instanceof Request ? await input.text() : undefined);
@@ -152,7 +159,7 @@ test('phrase-only hits join the pool, are hydrated owner- and adult-filtered, an
   fake.rerank = rankBy(['p1', 'a0']);
   const res = await searchKnowledge({ query: 'agent memory design', limit: 3 }, USER);
   assert.deepEqual(ids(res).slice(0, 2), ['p1', 'a0']);
-  const hydrate = callsTo('/rest/v1/items');
+  const hydrate = callsTo('/rest/v1/items').filter(c => c.url.includes('summary_oneliner'));   // not the stored-text lookup for passages
   assert.equal(hydrate.length, 1);
   const q = decodeURIComponent(hydrate[0].url);
   assert.match(q, /is_adult=eq\.false/);
@@ -568,4 +575,48 @@ test('a short pick is joined with its neighbours into one passage; a pick inside
   assert.equal(passages[1].n, 2);                           // s30 is inside the first passage and is not returned again
   const nb = callsTo('/rest/v1/transcript_segments').find(c => c.url.includes('item_id='))!;
   assert.ok(nb.url.includes('item_id=in.%28w1%29') || nb.url.includes('item_id=in.(w1)'));
+});
+
+test('a result with no segments gets a passage cut from its own stored text', async () => {
+  fake.adaptive = () => [row('n1', 0.9, { source_type: 'note' }), row('n2', 0.8, { source_type: 'instagram' }), row('n3', 0.7)];
+  const long = `${'filler words here. '.repeat(40)}The launch is planned for the ninth of March in Sofia. ${'more filler text. '.repeat(40)}`;
+  fake.texts = [{ id: 'n1', full_transcript: 'A short note about agent memory.', description: null }, { id: 'n2', full_transcript: null, description: long }];
+  const res = await searchKnowledge({ query: 'when is the launch planned in Sofia', limit: 3 }, USER);
+  const data = (res.structuredContent as any).data as Array<any>;
+  assert.deepEqual(data[0].passages, [{ text: 'A short note about agent memory.' }]);
+  assert.equal(data[1].passages.length, 1);
+  assert.match(data[1].passages[0].text, /ninth of March in Sofia/);
+  assert.equal('passages' in data[2], false);        // nothing stored: no field
+  const lookup = callsTo('/rest/v1/items').filter(c => c.url.includes('full_transcript'));
+  assert.equal(lookup.length, 1);
+  assert.ok(lookup[0].url.includes(`user_id=eq.${USER}`));
+});
+
+test('item_id searches inside one item: its passages for the query, owner-scoped, no library search', async () => {
+  fake.oneItem = [{ id: 'v1', video_id: 'abcDEF12345', title: 'Long talk', url: 'https://www.youtube.com/watch?v=abcDEF12345', source_type: 'youtube', summary: 'S', tags: null, taint_level: 1, provenance: 'third_party' }];
+  const long = (t: string) => `${t} ${'word '.repeat(60)}`.trim();
+  fake.segments = { v1: Array.from({ length: 9 }, (_, k) => ({ segment_id: `s${k}`, item_id: 'v1', segment_text: long(`passage ${k}`), start_time_sec: k * 100, combined_score: 0.9 - k / 20 })) };
+  fake.segmentIndex = Array.from({ length: 9 }, (_, k) => ({ id: `s${k}`, segment_index: k * 3 }));
+  const res = await searchKnowledge({ query: 'where does he talk about memory', limit: 6, item_id: 'abcDEF12345' }, USER);
+  const data = (res.structuredContent as any).data as Array<any>;
+  assert.equal(data.length, 1);
+  assert.equal(data[0].id, 'v1');
+  assert.equal(data[0].match_type, 'in_item');
+  assert.equal(data[0].provenance, 'third_party');
+  assert.equal(data[0].passages.length, 6);                              // `limit` passages
+  assert.deepEqual(data[0].passages[0].n, 0);
+  assert.equal((res.structuredContent as any).confidence, undefined);
+  assert.equal(callsTo('/rest/v1/rpc/adaptive_search').length, 0);
+  assert.equal(callsTo('/functions/v1/jev-rerank').length, 0);
+  const lookup = callsTo('/rest/v1/items')[0].url;
+  assert.ok(lookup.includes(`user_id=eq.${USER}`) && lookup.includes('video_id=eq.abcDEF12345'));
+  assert.deepEqual(callsTo(SEG).map(c => c.body.p_item_ids), [['v1']]);
+});
+
+test('item_id that is not the caller\'s item is refused with what to pass', async () => {
+  fake.oneItem = [];
+  await assert.rejects(
+    searchKnowledge({ query: 'anything at all', limit: 5, item_id: '00000000-0000-4000-8000-00000000dead' }, USER),
+    /No saved item with id "00000000-0000-4000-8000-00000000dead"\. Use an id returned by search/,
+  );
 });
