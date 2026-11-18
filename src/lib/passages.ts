@@ -29,9 +29,20 @@ export function passageBudget(rank: number): number {
   return rank < FULL_PASSAGE_ROWS ? MAX_PASSAGES : MAX_PASSAGES_TAIL;
 }
 
+/** A passage shorter than this is widened with the segments next to it (web pages are often cut into fragments). */
+export const MIN_PASSAGE_CHARS = 240;
+/** Widening stops once the passage is this long, or spans this many segments. */
+export const WIDE_PASSAGE_CHARS = 320;
+export const MAX_SPAN_SEGMENTS = 7;
+
+/** One item's segments by position, for widening: text and start time of the segments around a short pick. */
+export type Neighbours = Map<number, { text: string; start_time_sec?: unknown }>;
+
 /**
  * Best-first segment rows of ONE item -> up to `max` passages. `indexById` maps segment id -> position in the item.
- * Rows with no text are skipped; the same segment is never returned twice.
+ * Rows with no text are skipped; no segment is returned twice. A short segment ("AI Mode). Is") is joined with its
+ * neighbours from `neighbours` into one readable passage that starts at the earliest joined segment; a later pick
+ * that falls inside an earlier passage is skipped.
  */
 export function pickPassages(
   rows: PassageSegmentRow[],
@@ -39,22 +50,56 @@ export function pickPassages(
   videoId: string | null | undefined,
   max: number = MAX_PASSAGES,
   indexById?: Map<string, number>,
+  neighbours?: Neighbours,
 ): Passage[] {
   const out: Passage[] = [];
   const seen = new Set<string>();
+  const covered = new Set<number>();
   for (const r of rows) {
     if (out.length >= max) break;
-    const raw = typeof r.segment_text === 'string' ? r.segment_text : '';
-    const text = shortQuote(raw, PASSAGE_CHARS);
-    if (!text) continue;
-    const key = typeof r.segment_id === 'string' ? r.segment_id : text;
+    const raw = typeof r.segment_text === 'string' ? r.segment_text.trim() : '';
+    if (!raw) continue;
+    const key = typeof r.segment_id === 'string' ? r.segment_id : raw;
     if (seen.has(key)) continue;
     seen.add(key);
+    const idx = typeof r.segment_id === 'string' ? indexById?.get(r.segment_id) : undefined;
+    const n = typeof idx === 'number' && Number.isFinite(idx) ? idx : undefined;
+    if (n !== undefined && covered.has(n)) continue;
+
+    let joined = raw;
+    let lo = n;
+    let startRaw: unknown = r.start_time_sec;
+    if (n !== undefined) {
+      let hi = n;
+      let low = n;
+      if (neighbours && raw.length < MIN_PASSAGE_CHARS) {
+        // Forward first (the sentence continues), then one step back, alternating; never into another passage.
+        let forward = true;
+        let stuck = 0;
+        while (joined.length < WIDE_PASSAGE_CHARS && hi - low + 1 < MAX_SPAN_SEGMENTS && stuck < 2) {
+          const at = forward ? hi + 1 : low - 1;
+          const nb = at >= 0 && !covered.has(at) ? neighbours.get(at) : undefined;
+          const text = nb?.text?.trim();
+          if (text) {
+            stuck = 0;
+            if (forward) { joined = `${joined} ${text}`; hi = at; }
+            else { joined = `${text} ${joined}`; low = at; startRaw = nb?.start_time_sec; }
+          } else {
+            stuck++;
+          }
+          forward = !forward;
+        }
+      }
+      for (let i = low; i <= hi; i++) covered.add(i);
+      lo = low;
+    }
+
+    const text = shortQuote(joined, PASSAGE_CHARS);
+    if (!text) continue;
     const p: Passage = { text };
-    const n = typeof r.segment_id === 'string' ? indexById?.get(r.segment_id) : undefined;
-    if (typeof n === 'number' && Number.isFinite(n)) p.n = n;
-    const start = Number(r.start_time_sec);
-    if (r.start_time_sec != null && Number.isFinite(start)) {
+    if (lo !== undefined) p.n = lo;
+    const start = Number(startRaw);
+    if (startRaw != null && Number.isFinite(start)) {
       const t = Math.max(0, Math.floor(start));
       const link = timestampUrl(url, t, videoId);
       if (link) { p.t = t; p.url = link; }

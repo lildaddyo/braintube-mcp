@@ -7,7 +7,7 @@ import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 import type { AdaptiveResult } from '../db/supabase.js';
 import { parseQueryFilter, queryTopic, applyFilterPrior, type QueryFilter } from '../lib/query-filter.js';
 import { pickMoments, TIMED_SOURCES, type Moment } from '../lib/moments.js';
-import { pickPassages, passageBudget, type Passage, type PassageSegmentRow } from '../lib/passages.js';
+import { pickPassages, passageBudget, MIN_PASSAGE_CHARS, MAX_SPAN_SEGMENTS, type Passage, type PassageSegmentRow, type Neighbours } from '../lib/passages.js';
 import { detectScript } from '../lib/script.js';
 import { lexicalRpc } from '../lib/lexical-nl.js';
 
@@ -55,7 +55,7 @@ function mergeByBestScore(a: AdaptiveResult[], b: AdaptiveResult[], limit: numbe
 // cc-rrk3 relies on: it returns the SAME array object when it did nothing and a fresh array when it re-ranked.
 type RerankRow = AdaptiveResult & { summary_oneliner?: string | null };
 
-async function jevRerank(query: string, rows: AdaptiveResult[], windowSize = 10, userId?: string): Promise<AdaptiveResult[]> {
+async function jevRerank(query: string, rows: AdaptiveResult[], windowSize = 10, userId?: string, matched?: Map<string, string>): Promise<AdaptiveResult[]> {
   if (process.env.JEV_RERANK === 'off' || rows.length < 2) return rows;
   const baseUrl = process.env.SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -65,7 +65,8 @@ async function jevRerank(query: string, rows: AdaptiveResult[], windowSize = 10,
   const passages = top.map(r => ({
     id: r.id,
     title: r.title ?? null,
-    text: [r.summary_oneliner, r.summary].filter(Boolean).join('\n').slice(0, 1200),
+    // A row found through its transcript text is judged on that passage first: its summary may not mention the word.
+    text: [matched?.get(r.id), r.summary_oneliner, r.summary].filter(Boolean).join('\n').slice(0, 1200),
   }));
 
   // Scores are memoised per (query, ordered passage ids) - repeated agent queries skip the edge-function call.
@@ -158,9 +159,9 @@ async function phraseRecall(embedding: number[], userId: string): Promise<string
 }
 
 /** Phrase hits the adaptive search did not return, hydrated like adaptive_search rows (same columns), owner-checked. */
-async function hydratePhraseOnly(phraseIds: string[], adaptive: AdaptiveResult[], userId: string): Promise<AdaptiveResult[]> {
+async function hydratePhraseOnly(phraseIds: string[], adaptive: AdaptiveResult[], userId: string, strategy = 'phrase_recall', max = 10): Promise<AdaptiveResult[]> {
   const have = new Set(adaptive.map(r => r.id));
-  const ids = phraseIds.filter(id => !have.has(id)).slice(0, 10);
+  const ids = phraseIds.filter(id => !have.has(id)).slice(0, max);
   if (ids.length === 0) return [];
   try {
     const { data, error } = await dbAdmin
@@ -185,13 +186,45 @@ async function hydratePhraseOnly(phraseIds: string[], adaptive: AdaptiveResult[]
         id: r.id, title: r.title, url: r.url, source_type: r.source_type, channel: r.channel, summary: r.summary,
         summary_oneliner: r.summary_oneliner, topic_primary: r.topic_primary, key_concepts: r.key_concepts, entities: r.entities,
         tags: Array.isArray(r.tags) ? r.tags : [], created_at: r.created_at,
-        full_text_rank: null, semantic_rank: null, rrf_score: 0, strategy: 'phrase_recall',
+        full_text_rank: null, semantic_rank: null, rrf_score: 0, strategy,
       } as unknown as AdaptiveResult);
     }
-    console.error(`[phrase-recall] ${phraseIds.length} hits, ${ids.length} phrase-only, ${rows.length} hydrated`);
+    console.error(`[${strategy}] ${phraseIds.length} hits, ${ids.length} new, ${rows.length} hydrated`);
     return rows;
   } catch (err) {
     console.error(`[phrase-recall] hydrate skipped: ${err instanceof Error ? err.name : 'error'}`);
+    return [];
+  }
+}
+
+// -- Segment recall (retrieval gap vs Recall, 2026-11-19) ---------------------------------------------------------
+// adaptive_search ranks items on their title, summary and tags, so a word that is only SPOKEN in a video ("Bevy")
+// or written deep in an article never reached the result list. This asks the segment index (dense + lexical lists,
+// reciprocal-rank fused, over the whole library) for the best passages and offers their items as extra candidates
+// for the JEV re-ranker, each with its matching passage as the text to judge. Like phrase recall, such a row is only
+// ever returned after the re-ranker scored it. Inert when JEV_RERANK=off; kill switch: SEGMENT_RECALL=off.
+const SEGMENT_RECALL_ROWS = 12;
+const SEGMENT_RECALL_ITEMS = 5;
+
+/** Items of the best-matching segments in the user's library, best first, each with that segment's text. Any error -> []. */
+async function segmentRecall(query: string, embedding: number[], userId: string): Promise<Array<{ id: string; text: string }>> {
+  try {
+    const { data, error } = await dbAdmin
+      .rpc('search_segments_core', { p_user_id: userId, p_query: query, p_query_embedding: JSON.stringify(embedding), p_limit: SEGMENT_RECALL_ROWS, p_mode: 'rrf' })
+      .abortSignal(AbortSignal.timeout(2500));
+    if (error) {
+      console.error(`[segment-recall] skipped: ${String(error.message).slice(0, 120)}`);
+      return [];
+    }
+    const out: Array<{ id: string; text: string }> = [];
+    for (const r of (data ?? []) as Array<{ item_id?: unknown; segment_text?: unknown }>) {
+      if (typeof r?.item_id !== 'string' || typeof r.segment_text !== 'string' || !r.segment_text.trim()) continue;
+      const id = r.item_id;
+      if (!out.some(o => o.id === id)) out.push({ id, text: r.segment_text.replace(/\s+/g, ' ').trim().slice(0, 600) });
+    }
+    return out;
+  } catch (err) {
+    console.error(`[segment-recall] skipped: ${err instanceof Error ? err.name : 'error'}`);
     return [];
   }
 }
@@ -230,12 +263,14 @@ async function windowCandidates(topic: string, topicEmbedding: number[], f: Quer
 // one long video cannot crowd out the others. The row itself is unchanged. Fails open per item (no field). Kill
 // switches: SEARCH_PASSAGES=off (no passages), SEARCH_MOMENTS=off (no moments); with both off no RPC is made.
 const PASSAGE_ITEMS = 10;
-const SEGMENT_ROWS = 8;
+const SEGMENT_ROWS = 16;
 
-// Segment ranking: reciprocal-rank fusion of the dense and the lexical list (search_segments_core, mode 'rrf'), so a
-// passage that holds the query's rare words ranks beside the semantically closest ones (measured 2026-11-19: the answer
-// segment moved from position 7 to 3 of 364). Non-Latin queries with KO_PGROONGA=on keep the search_segments_nl twin,
-// and any error on the core RPC falls back to search_segments (the ranking moments used before).
+// Segment ranking: one call returns the item's segments by reciprocal-rank fusion of the dense and the lexical list
+// (search_segments_core, mode 'rrf') together with each row's fused score (cosine + a small lexical bonus, the order
+// moments have always used). Passages take turns from both orders (byBothOrders), because each finds answers the other
+// ranks low: measured 2026-11-19 on the Recall comparison battery, the answer segment sat at position 7 fused / 3 rrf
+// for one question and 2 fused / 6 rrf for another. Non-Latin queries with KO_PGROONGA=on keep the search_segments_nl
+// twin, and any error on the core RPC falls back to search_segments.
 async function itemSegments(query: string, embedding: number[], userId: string, row: AdaptiveResult): Promise<PassageSegmentRow[]> {
   const args = { p_user_id: userId, p_query: query, p_query_embedding: JSON.stringify(embedding), p_limit: SEGMENT_ROWS, p_item_ids: [row.id] };
   const legacy = lexicalRpc('search_segments', query);
@@ -257,6 +292,22 @@ async function itemSegments(query: string, embedding: number[], userId: string, 
   }
 }
 
+const fusedScore = (s: PassageSegmentRow) => { const n = Number(s.combined_score); return Number.isFinite(n) ? n : -Infinity; };
+/** The rows by fused score, best first (stable: ties keep the order given). */
+function byFusedScore(rows: PassageSegmentRow[]): PassageSegmentRow[] {
+  return rows.map((r, i) => ({ r, i })).sort((a, b) => (fusedScore(b.r) - fusedScore(a.r)) || (a.i - b.i)).map(x => x.r);
+}
+/** Fused #1, rrf #1, fused #2, rrf #2, ... without repeats. `rrf` is the order the RPC returned. */
+function byBothOrders(rrf: PassageSegmentRow[]): PassageSegmentRow[] {
+  const fused = byFusedScore(rrf);
+  const out: PassageSegmentRow[] = [];
+  const seen = new Set<PassageSegmentRow>();
+  for (let i = 0; i < rrf.length; i++) {
+    for (const r of [fused[i], rrf[i]]) if (!seen.has(r)) { seen.add(r); out.push(r); }
+  }
+  return out;
+}
+
 /** Position of each segment inside its item (segment_index), for the passages' `n`. Any error -> empty map (no `n`). */
 async function segmentIndexes(segmentIds: string[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
@@ -275,26 +326,74 @@ async function segmentIndexes(segmentIds: string[]): Promise<Map<string, number>
   return out;
 }
 
+/**
+ * The segments next to each short pick (web pages are often stored as sentence fragments), per item and position, so
+ * pickPassages can join them into a readable passage. One query for all items; any error -> no widening.
+ */
+const NEIGHBOUR_REACH = MAX_SPAN_SEGMENTS - 1;
+async function segmentNeighbours(short: Array<{ itemId: string; n: number }>): Promise<Map<string, Neighbours>> {
+  const out = new Map<string, Neighbours>();
+  if (short.length === 0) return out;
+  const itemIds = [...new Set(short.map(s => s.itemId))];
+  const wanted = new Map<string, Set<number>>();
+  const indexes = new Set<number>();
+  for (const { itemId, n } of short) {
+    const set = wanted.get(itemId) ?? new Set<number>();
+    for (let i = Math.max(0, n - NEIGHBOUR_REACH); i <= n + NEIGHBOUR_REACH; i++) { set.add(i); indexes.add(i); }
+    wanted.set(itemId, set);
+  }
+  try {
+    const { data, error } = await dbAdmin
+      .from('transcript_segments')
+      .select('item_id, segment_index, text, start_time_sec')
+      .in('item_id', itemIds)
+      .in('segment_index', [...indexes])
+      .limit(1000)
+      .abortSignal(AbortSignal.timeout(1500));
+    if (error) return out;
+    for (const r of (data ?? []) as Array<{ item_id?: unknown; segment_index?: unknown; text?: unknown; start_time_sec?: unknown }>) {
+      if (typeof r.item_id !== 'string' || typeof r.segment_index !== 'number' || typeof r.text !== 'string') continue;
+      if (!wanted.get(r.item_id)?.has(r.segment_index)) continue;
+      const m = out.get(r.item_id) ?? new Map();
+      m.set(r.segment_index, { text: r.text, start_time_sec: r.start_time_sec });
+      out.set(r.item_id, m);
+    }
+  } catch { /* no widening */ }
+  return out;
+}
+
 export async function attachPassages<T extends AdaptiveResult>(query: string, embedding: number[], userId: string, rows: T[]): Promise<Array<T & { passages?: Passage[]; moments?: Moment[] }>> {
   const passagesOn = process.env.SEARCH_PASSAGES !== 'off';
   const momentsOn = process.env.SEARCH_MOMENTS !== 'off';
   const isTimed = (r: AdaptiveResult) => TIMED_SOURCES.has(String(r.source_type ?? ''));
   const wanted = rows.slice(0, PASSAGE_ITEMS).filter(r => passagesOn || (momentsOn && isTimed(r)));
   if (wanted.length === 0) return rows;
-  const found = await Promise.all(wanted.map(r => itemSegments(query, embedding, userId, r)));
+  const raw = await Promise.all(wanted.map(r => itemSegments(query, embedding, userId, r)));
+  const found = raw.map(byBothOrders);                                  // passage order
   const segs = new Map(wanted.map((r, i) => [r.id, found[i]]));
+  const fusedSegs = new Map(wanted.map((r, i) => [r.id, byFusedScore(raw[i])]));   // moment order, as before
   const budget = new Map(rows.map((r, i) => [r.id, passageBudget(i)]));
-  const picked = passagesOn
-    ? found.flatMap((list, i) => list.slice(0, budget.get(wanted[i].id) ?? 0).map(s => s.segment_id).filter((id): id is string => typeof id === 'string'))
-    : [];
-  const indexById = await segmentIndexes(picked);
-  console.error(`[passages] ${found.filter(m => m.length > 0).length}/${wanted.length} results got segments`);
+  const sid = (s: PassageSegmentRow) => (typeof s.segment_id === 'string' ? s.segment_id : null);
+  const indexById = passagesOn ? await segmentIndexes(found.flat().map(sid).filter((id): id is string => id !== null)) : new Map<string, number>();
+  // Short picks (within each item's budget) get their neighbours, so a fragment becomes a readable passage.
+  const short: Array<{ itemId: string; n: number }> = [];
+  if (passagesOn) {
+    found.forEach((list, i) => {
+      for (const s of list.slice(0, budget.get(wanted[i].id) ?? 0)) {
+        const id = sid(s);
+        const n = id ? indexById.get(id) : undefined;
+        if (n !== undefined && typeof s.segment_text === 'string' && s.segment_text.trim().length < MIN_PASSAGE_CHARS) short.push({ itemId: wanted[i].id, n });
+      }
+    });
+  }
+  const neighbours = await segmentNeighbours(short);
+  console.error(`[passages] ${found.filter(m => m.length > 0).length}/${wanted.length} results got segments, ${short.length} short picks widened`);
   return rows.map(r => {
     const list = segs.get(r.id);
     if (!list || list.length === 0) return r;
     const meta = r as AdaptiveResult & { url?: string | null; video_id?: string | null };
-    const passages = passagesOn ? pickPassages(list, meta.url, meta.video_id, budget.get(r.id), indexById) : [];
-    const moments = momentsOn && isTimed(r) ? pickMoments(list, meta.url, meta.video_id) : [];
+    const passages = passagesOn ? pickPassages(list, meta.url, meta.video_id, budget.get(r.id), indexById, neighbours.get(r.id)) : [];
+    const moments = momentsOn && isTimed(r) ? pickMoments(fusedSegs.get(r.id) ?? list, meta.url, meta.video_id) : [];
     return { ...r, ...(passages.length > 0 ? { passages } : {}), ...(moments.length > 0 ? { moments } : {}) };
   });
 }
@@ -360,6 +459,9 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
       // on their English translation below (QA 2026-10-15b: the phrases are English).
       const phraseOn = rerankOn && process.env.PHRASE_RECALL !== 'off';
       let phrasePromise = phraseOn && !crossLingual ? phraseRecall(embedding, userId) : null;
+      // Segment recall runs the same way: alongside adaptive_search, on the English text for cross-lingual queries.
+      const segmentOn = rerankOn && process.env.SEGMENT_RECALL !== 'off';
+      let segmentPromise = segmentOn && !crossLingual ? segmentRecall(query, embedding, userId) : null;
       let results = await adaptiveSearchRpc(query, embedding, userId, fetchLimit);
       console.error(`[search] adaptive returned ${results.length} results`);
 
@@ -374,6 +476,7 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
           enQuery = translated;
           enEmbedding = await generateEmbedding(translated);
           if (phraseOn) phrasePromise = phraseRecall(enEmbedding, userId);
+          if (segmentOn) segmentPromise = segmentRecall(translated, enEmbedding, userId);
           const tResults = await adaptiveSearchRpc(translated, enEmbedding, userId, fetchLimit);
           results = mergeByBestScore(results, tResults, rerankOn ? Math.max(fetchLimit, 20) : fetchLimit);
         }
@@ -403,11 +506,17 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
         // original/English union + phrase-only rows (max 20), and the WHOLE pool is scored; rows outside the pool stay after it.
         const windowRows = windowPromise ? await windowPromise : [];
         const more = crossLingual && rerankOn ? results.slice(10, 20) : [];
-        const phraseOnly = phrasePromise ? await hydratePhraseOnly(await phrasePromise, [...results, ...windowRows], userId) : [];
-        const extras = [...windowRows, ...more, ...phraseOnly];
+        const segmentHits = segmentPromise ? await segmentPromise : [];
+        const segmentOnly = segmentHits.length
+          ? await hydratePhraseOnly(segmentHits.map(h => h.id), [...results, ...windowRows], userId, 'segment_recall', SEGMENT_RECALL_ITEMS)
+          : [];
+        const phraseOnly = phrasePromise ? await hydratePhraseOnly(await phrasePromise, [...results, ...windowRows, ...segmentOnly], userId) : [];
+        const extras = [...windowRows, ...more, ...segmentOnly, ...phraseOnly];
         if (extras.length > 0) {
           const pool = [...results.slice(0, 10), ...extras].slice(0, 20);
-          const ranked = await jevRerank(rerankQuery, pool, 20, userId);
+          // A pool row with a matching segment is judged on that passage plus its summary (the summary alone may not hold the word).
+          const segmentText = new Map(segmentHits.map(h => [h.id, h.text]));
+          const ranked = await jevRerank(rerankQuery, pool, 20, userId, segmentText);
           const inPool = new Set(pool.map(r => r.id));
           // ranked === pool means jevRerank did nothing: fail open to exactly what the retriever returned (extra rows dropped)
           results = (ranked === pool ? results : [...applyFilterPrior(ranked, filter), ...results.filter(r => !inPool.has(r.id))]).slice(0, limit);
