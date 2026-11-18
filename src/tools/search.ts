@@ -115,6 +115,71 @@ async function jevRerank(query: string, rows: AdaptiveResult[], windowSize = 10,
   }
 }
 
+// -- Confidence recheck on the returned passages (calibration, 2026-11-19) ---------------------------------------
+// The re-ranker judges most rows on their summary. A summary can leave out the very fact a question asks for ("how
+// many days until ...") although the item's passages state it, so correct answers were flagged low confidence
+// (3 of 26 in the Recall comparison: 0.475, 0.565, 0.28). When the best score is under the threshold, the top rows
+// are judged once more on the passages this response returns; a row keeps the higher of its two scores and the top
+// rows are re-sorted. A score can only go up, and only on text the caller is about to read. One extra jev-rerank call,
+// made only for low-confidence answers. Fails open (scores unchanged). Kill switch: CONFIDENCE_RECHECK=off.
+const RECHECK_ROWS = 3;
+
+type ScoredRow = AdaptiveResult & { relevance_score?: number | null; passages?: Passage[] };
+
+async function recheckOnPassages<T extends AdaptiveResult>(query: string, rows: T[], userId: string): Promise<T[]> {
+  if (process.env.CONFIDENCE_RECHECK === 'off' || process.env.JEV_RERANK === 'off') return rows;
+  const confidence = confidenceOf(rows as ScoredRow[]);
+  if (!confidence?.low_confidence) return rows;
+  const baseUrl = process.env.SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!baseUrl || !serviceKey) return rows;
+  const head = (rows.slice(0, RECHECK_ROWS) as ScoredRow[]).filter(r => typeof r.relevance_score === 'number' && Array.isArray(r.passages) && r.passages.length > 0);
+  if (head.length === 0) return rows;
+  const passages = head.map(r => ({
+    id: r.id,
+    title: r.title ?? null,
+    text: (r.passages ?? []).slice(0, 3).map(p => p.text).join('\n').slice(0, 1400),
+  }));
+  const cacheKey = hashKey('jev-recheck', normaliseQuery(query), passages.map(p => `${p.id}:${p.text.length}`).join(','));
+  try {
+    const scoreById = await rerankCache.getOrCompute(cacheKey, async () => {
+      const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/functions/v1/jev-rerank`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${serviceKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, passages, source: 'mcp', user_id: userId }),
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!res.ok) {
+        console.error(`[confidence-recheck] skipped: HTTP ${res.status}`);
+        return null;
+      }
+      const data = (await res.json()) as { scores?: unknown };
+      if (!Array.isArray(data?.scores)) return null;
+      const scores = new Map<string, number>();
+      for (const s of data.scores as Array<{ id?: unknown; score?: unknown }>) {
+        if (typeof s?.id === 'string' && typeof s.score === 'number' && Number.isFinite(s.score)) scores.set(s.id, s.score);
+      }
+      return scores;
+    });
+    if (!scoreById) return rows;
+    let raised = 0;
+    const rechecked = (rows.slice(0, RECHECK_ROWS) as ScoredRow[]).map((r, i) => {
+      const fresh = scoreById.get(r.id);
+      const old = typeof r.relevance_score === 'number' ? r.relevance_score : null;
+      if (typeof fresh !== 'number' || old === null || fresh <= old) return { r, i, s: old ?? -1 };
+      raised++;
+      return { r: { ...r, relevance_score: Math.round(fresh * 1000) / 1000 }, i, s: fresh };
+    });
+    if (raised === 0) return rows;
+    rechecked.sort((a, b) => (b.s - a.s) || (a.i - b.i));
+    console.error(`[confidence-recheck] ${raised}/${head.length} top rows scored higher on their passages (top ${confidence.top_relevance} -> ${rechecked[0].s.toFixed(3)})`);
+    return [...rechecked.map(x => x.r as unknown as T), ...rows.slice(RECHECK_ROWS)];
+  } catch (err) {
+    console.error(`[confidence-recheck] skipped: ${err instanceof Error ? err.name : 'error'}`);
+    return rows;
+  }
+}
+
 // -- Phrase recall (cc-rrk3, 2026-09-25) --------------------------------------------------------
 // Extra CANDIDATES for the JEV re-ranker: items whose best "how would I search for this" phrase matches the
 // query (RPC search_item_phrases, service_role only; it already drops archived, adult and taint>=3 items).
@@ -470,6 +535,10 @@ async function searchInsideItem(query: string, itemId: string, limit: number, us
 // results is likely to answer the query (the library may not contain it). Results are NEVER dropped - only flagged.
 // Default 0.6 separated answerable from unanswerable benchmark queries (AUROC 0.97 on the summary-view score); it was
 // chosen on the whole benchmark, so recalibrate on real traffic. Env: SEARCH_LOW_CONFIDENCE_THRESHOLD (number, or 'off').
+// Recalibrated 2026-11-19 on the frozen 223-query set (21 unanswerable) with passages in play: the unanswerable queries
+// top out at 0.51 (a "partial" verdict scores 0.5), so the threshold cannot go under 0.55 without letting them through.
+// It stays 0.6; correct answers that scored low on their summary are fixed by recheckOnPassages instead (answerable
+// queries with the expected item first and flagged: 6 of 168 -> 1 of 162; unanswerable flagged: 21 of 21 both ways).
 export function lowConfidenceThreshold(): number | null {
   const raw = process.env.SEARCH_LOW_CONFIDENCE_THRESHOLD;
   if (raw === 'off') return null;
@@ -585,6 +654,7 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
           results = (ranked === results ? results : [...applyFilterPrior(ranked.slice(0, 10), filter), ...ranked.slice(10)]).slice(0, limit);
         }
         results = await attachPassages(baseQuery, enEmbedding ?? embedding, userId, results);
+        results = await recheckOnPassages(rerankQuery, results, userId);
         // Use strategy as match_type so callers can see which retrieval path was used
         const withMatchType = results.map(r => ({
           ...r,
