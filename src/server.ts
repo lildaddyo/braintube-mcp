@@ -47,6 +47,11 @@ import {
 } from './tools/analytics.js';
 import { exportClaudeMdSchema, exportClaudeMd, exportClaudeMdOutputSchema } from './tools/claude-md.js';
 import { recomputeSalienceSchema, recomputeSalience, recomputeSalienceOutputSchema } from './tools/salience.js';
+import {
+  contentHeatSchema, contentHeat, contentHeatOutputSchema,
+  compileSuggestionsSchema, compileSuggestions, compileSuggestionsOutputSchema,
+  dailyDigestSchema, dailyDigest, dailyDigestOutputSchema,
+} from './tools/heat.js';
 import { deepSearchSchema, deepSearch, deepSearchOutputSchema } from './tools/deep-search.js';
 import { retrievalQualitySchema, retrievalQuality, retrievalQualityOutputSchema } from './tools/retrieval-quality.js';
 import { edgeHistorySchema, getEdgeHistory, getEdgeHistoryOutputSchema } from './tools/edge-history.js';
@@ -1055,6 +1060,39 @@ export function buildMcpServer(
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => mostRetrieved(input, auth.userId)
+  );
+
+  server.registerTool(
+    'content_heat',
+    {
+      description: 'Rank saved items by heat: how much they are in use and by whom. Each item carries agent_heat (AI clients reached it over MCP), user_heat (the person opened, searched, noted or starred it in the app) and a tier (hot, warm, cool, cold) relative to this library. Filter by tier or by who touched it; coldest_first lists stale saves nobody uses.',
+      inputSchema: contentHeatSchema,
+      outputSchema: contentHeatOutputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => contentHeat(input, auth.userId)
+  );
+
+  server.registerTool(
+    'compile_suggestions',
+    {
+      description: 'List stacks of saves that are piling up unused: topics with several stale items that no compiled article covers yet. Each stack says how many items, sample titles and what to do next (the compile_knowledge call when the topic has a cluster).',
+      inputSchema: compileSuggestionsSchema,
+      outputSchema: compileSuggestionsOutputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => compileSuggestions(input, auth.userId)
+  );
+
+  server.registerTool(
+    'daily_digest',
+    {
+      description: "One call for a daily review: everything saved in the last N hours (default 24) with each item's summary, thesis and takeaways, plus the library's heat counts and the stale stacks worth compiling. Use it to brief on what was captured and decide what to act on.",
+      inputSchema: dailyDigestSchema,
+      outputSchema: dailyDigestOutputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => dailyDigest(input, auth.userId)
   );
 
   // ── Phase 9 tools (36-45) ────────────────────────────────────────────────────

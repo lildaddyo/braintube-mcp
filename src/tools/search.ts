@@ -25,6 +25,7 @@ async function logRetrieval(
       match_types:         results.map(r => r.strategy ?? 'adaptive'),
       result_count:        results.length,
       search_method:       results[0]?.strategy ?? 'adaptive',
+      actor:               'agent',
     });
   } catch (err) {
     console.error('[search] retrieval_log insert failed (non-fatal):', err);

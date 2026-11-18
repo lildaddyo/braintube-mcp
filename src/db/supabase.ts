@@ -282,6 +282,8 @@ export async function logMcpRetrieval(
       search_method:      searchMethod,
       result_count:       resultCount,
       retrieved_item_ids: retrievedItemIds,
+      // Who asked: every row this server writes comes from an AI client (item heat, 2026-11-19).
+      actor:              'agent',
     });
   } catch (err) {
     console.error(`[retrieval_log] insert failed for ${searchMethod} (non-fatal):`, err);

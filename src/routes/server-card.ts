@@ -22,6 +22,10 @@ import { videoSchema, getVideoOutputSchema } from '../tools/video.js';
 import { grepSchema, grepOutputSchema } from '../tools/grep.js';
 import { chatgptSearchSchema, chatgptSearchOutputSchema, chatgptFetchSchema, chatgptFetchOutputSchema } from '../tools/chatgpt-compat.js';
 import { recentSchema, listRecentOutputSchema } from '../tools/recent.js';
+import {
+  contentHeatSchema, contentHeatOutputSchema, compileSuggestionsSchema, compileSuggestionsOutputSchema,
+  dailyDigestSchema, dailyDigestOutputSchema,
+} from '../tools/heat.js';
 import { statsSchema, getStatsOutputSchema } from '../tools/stats.js';
 import { noteSchema, addNoteOutputSchema } from '../tools/note.js';
 import { backfillEmbeddingsOutputSchema } from '../tools/embedding.js';
@@ -411,6 +415,27 @@ const CARD_TOOLS = [
     description: 'Return the items you retrieve most often, ranked by retrieval_count.',
     inputSchema: toInputSchema(mostRetrievedSchema),
     outputSchema: toOutputSchema(mostRetrievedOutputSchema),
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'content_heat',
+    description: 'Rank saved items by heat: how much they are in use and by whom. Each item carries agent_heat (AI clients reached it over MCP), user_heat (the person opened, searched, noted or starred it in the app) and a tier (hot, warm, cool, cold) relative to this library. Filter by tier or by who touched it; coldest_first lists stale saves nobody uses.',
+    inputSchema: toInputSchema(contentHeatSchema),
+    outputSchema: toOutputSchema(contentHeatOutputSchema),
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'compile_suggestions',
+    description: 'List stacks of saves that are piling up unused: topics with several stale items that no compiled article covers yet. Each stack says how many items, sample titles and what to do next (the compile_knowledge call when the topic has a cluster).',
+    inputSchema: toInputSchema(compileSuggestionsSchema),
+    outputSchema: toOutputSchema(compileSuggestionsOutputSchema),
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: 'daily_digest',
+    description: "One call for a daily review: everything saved in the last N hours (default 24) with each item's summary, thesis and takeaways, plus the library's heat counts and the stale stacks worth compiling. Use it to brief on what was captured and decide what to act on.",
+    inputSchema: toInputSchema(dailyDigestSchema),
+    outputSchema: toOutputSchema(dailyDigestOutputSchema),
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
