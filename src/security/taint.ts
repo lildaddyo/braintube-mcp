@@ -46,7 +46,7 @@ export function checkWriteGate(token: string): boolean {
 }
 
 // Format tainted response as MCP text content
-export function formatTaintedResponse(response: TaintedResponse<unknown>): string {
+export function formatTaintedResponse(response: TaintedResponse<unknown>, compact = false): string {
   const taintLabel = TAINT_LABELS[response.taint_level] ?? 'unknown';
   const parts: string[] = [];
 
@@ -54,7 +54,8 @@ export function formatTaintedResponse(response: TaintedResponse<unknown>): strin
     parts.push(`⚠️ TAINT WARNING [${taintLabel.toUpperCase()}]: ${response.taint_warning}\n`);
   }
 
-  parts.push(JSON.stringify(response.data, null, 2));
+  // compact: no indentation. The same rows are in structuredContent; pretty-printing them cost about a quarter more.
+  parts.push(compact ? JSON.stringify(response.data) : JSON.stringify(response.data, null, 2));
 
   if (response.taint_level >= 1) {
     parts.push(`\n[Taint level: ${taintLabel} (${response.taint_level}/3)]`);

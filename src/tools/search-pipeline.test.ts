@@ -12,7 +12,7 @@ process.env.OPENAI_API_KEY = ['fixture', 'openai', 'key'].join('-');
 // These tests mock api.openai.com; the via-app path (D-211) is covered in lib/openai-via-app.test.ts.
 process.env.OPENAI_VIA_APP = 'off';
 
-const { searchKnowledge, crossLingualScript } = await import('./search.js');
+const { searchKnowledge, crossLingualScript, searchKnowledgeOutputSchema } = await import('./search.js');
 const { SCRIPT_CASES } = await import('../lib/script-cases.js');
 const { clearCaches, cacheStats } = await import('../lib/ttl-cache.js');
 
@@ -690,4 +690,36 @@ test('confidence recheck needs passages: rows without any are left as scored', a
   const res = await searchKnowledge({ query: 'no passages anywhere', limit: 2 }, USER);
   assert.equal(fake.rechecks.length, 0);
   assert.equal((res.structuredContent as any).confidence.low_confidence, true);
+});
+
+test('rows the re-ranker scores under 0.05 are left out, the best row always stays, and rows carry no ranking internals', async () => {
+  fake.adaptive = () => tenRows().map(r => ({ ...r, full_text_rank: 2, semantic_rank: 1 }));
+  fake.rerank = () => ({ a0: 0.3, a1: 0.12, a2: 0.049, a3: 0.02, a4: 0.015, a5: 0.01, a6: 0, a7: 0, a8: 0, a9: 0 });
+  const res = await searchKnowledge({ query: 'kubernetes autoscaler tuning', limit: 5 }, USER);
+  const sc = res.structuredContent as any;
+  assert.deepEqual(sc.data.map((r: any) => r.id), ['a0', 'a1']);
+  assert.equal(sc.omitted_low_relevance, 3);
+  assert.equal(sc.confidence.low_confidence, true);
+  assert.match(res.content[0].text, /\[3 weaker results left out \(relevance under 0\.05\)\.\]$/);
+  for (const k of ['full_text_rank', 'semantic_rank', 'rrf_score', 'strategy', 'similarity', 'centrality_score']) assert.equal(k in sc.data[0], false, k);
+  assert.equal(sc.data[0].match_type, 'balanced');
+  assert.equal(sc.data[0].relevance_score, 0.3);
+  assert.equal(searchKnowledgeOutputSchema.safeParse(sc).success, true);
+  // the text block is compact JSON
+  assert.ok(res.content[0].text.includes('[{"id":"a0"'));
+
+  // nothing in the library: one row comes back, flagged
+  fake.rerank = (_q, idsIn) => Object.fromEntries(idsIn.map((id, i) => [id, 0.02 - i / 1000]));
+  const none = (await searchKnowledge({ query: 'sourdough starter hydration', limit: 5 }, USER)).structuredContent as any;
+  assert.equal(none.data.length, 1);
+  assert.equal(none.omitted_low_relevance, 4);
+  assert.equal(none.confidence.low_confidence, true);
+});
+
+test('without a re-rank no row is left out (there is no score to judge by)', async () => {
+  fake.adaptive = () => tenRows();
+  fake.rerank = 'fail';
+  const sc = (await searchKnowledge({ query: 'agent memory design', limit: 5 }, USER)).structuredContent as any;
+  assert.equal(sc.data.length, 5);
+  assert.equal('omitted_low_relevance' in sc, false);
 });
