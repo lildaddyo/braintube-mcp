@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { searchKnowledge } from './search.js';
 import { getVideo } from './video.js';
 import { momentSchema, type Moment } from '../lib/moments.js';
+import { passageSchema, type Passage } from '../lib/passages.js';
 
 export const chatgptSearchSchema = z.object({
   query: z.string().min(1).max(500).describe('Search query over your saved BrainTube library, in natural language.'),
@@ -28,8 +29,18 @@ export const chatgptSearchOutputSchema = z.object({
     id: z.string(),
     title: z.string(),
     url: z.string(),
-    // Videos only: the passages that match the query, each linking to that second (src/lib/moments.ts).
+    // The text of the item that matches the query (src/lib/passages.ts); videos also get moments, each linking to that
+    // second (src/lib/moments.ts). On the wire both sit under `untrusted_content` with one trust label per result
+    // (src/security/untrusted-envelope.ts); the top-level fields are what the handler builds before the envelope.
+    passages: z.array(passageSchema).optional(),
     moments: z.array(momentSchema).optional(),
+    trust: z.string().optional(),
+    provenance: z.string().optional(),
+    taint_level: z.number().optional(),
+    untrusted_content: z.object({
+      passages: z.array(passageSchema).optional(),
+      moments: z.array(momentSchema).optional(),
+    }).optional(),
   })),
 });
 
@@ -60,6 +71,9 @@ interface ItemRow {
   full_transcript?: unknown;
   tags?: unknown;
   moments?: unknown;
+  passages?: unknown;
+  provenance?: unknown;
+  taint_level?: unknown;
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
@@ -90,13 +104,18 @@ function jsonResult<T extends Record<string, unknown>>(value: T) {
 
 export function toSearchResults(rows: ItemRow[]): z.infer<typeof chatgptSearchOutputSchema> {
   const seen = new Set<string>();
-  const results: Array<{ id: string; title: string; url: string; moments?: Moment[] }> = [];
+  const results: Array<{ id: string; title: string; url: string; passages?: Passage[]; moments?: Moment[]; provenance?: string; taint_level?: number }> = [];
   for (const row of rows) {
     const id = str(row.id);
     if (!id || seen.has(id)) continue;
     seen.add(id);
     const moments = Array.isArray(row.moments) && row.moments.length > 0 ? (row.moments as Moment[]) : undefined;
-    results.push({ id, title: str(row.title) || 'Untitled', url: itemUrl(row), ...(moments ? { moments } : {}) });
+    const passages = Array.isArray(row.passages) && row.passages.length > 0 ? (row.passages as Passage[]) : undefined;
+    // Carried so the envelope labels the result with the item's own provenance and taint, not the defaults.
+    const label = passages || moments
+      ? { ...(str(row.provenance) ? { provenance: str(row.provenance) } : {}), ...(typeof row.taint_level === 'number' ? { taint_level: row.taint_level } : {}) }
+      : {};
+    results.push({ id, title: str(row.title) || 'Untitled', url: itemUrl(row), ...(passages ? { passages } : {}), ...(moments ? { moments } : {}), ...label });
   }
   return { results };
 }
