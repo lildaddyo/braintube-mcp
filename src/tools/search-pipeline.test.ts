@@ -35,10 +35,12 @@ type Fake = {
   segments: Record<string, Array<Record<string, unknown>>>;
   segmentIndex: Array<{ id: string; segment_index: number }>;
   coreFails: boolean;
+  recall: Array<Record<string, unknown>>;
+  neighbours: Array<Record<string, unknown>>;
 };
 let fake: Fake;
 const realFetch = globalThis.fetch;
-const ENV_KEYS = ['JEV_RERANK', 'PHRASE_RECALL', 'QUERY_FILTER', 'SEARCH_LOW_CONFIDENCE_THRESHOLD', 'XL_ALL_SCRIPTS'] as const;
+const ENV_KEYS = ['JEV_RERANK', 'PHRASE_RECALL', 'SEGMENT_RECALL', 'QUERY_FILTER', 'SEARCH_LOW_CONFIDENCE_THRESHOLD', 'XL_ALL_SCRIPTS'] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -59,10 +61,11 @@ function route(url: URL, body: any): Response {
   if (p === '/rest/v1/rpc/search_items_window') return json(fake.window(body));
   if (p === '/rest/v1/rpc/search_segments_core') {
     if (fake.coreFails) return json({ message: 'function search_segments_core does not exist' }, 404);
+    if (!body.p_item_ids) return json(fake.recall);   // library-wide: segment recall
     return json((body.p_item_ids as string[]).flatMap(id => fake.segments[id] ?? []));
   }
   if (p === '/rest/v1/rpc/search_segments') return json((body.p_item_ids as string[]).flatMap(id => fake.segments[id] ?? []));
-  if (p === '/rest/v1/transcript_segments') return json(fake.segmentIndex);
+  if (p === '/rest/v1/transcript_segments') return json(url.searchParams.has('item_id') ? fake.neighbours : fake.segmentIndex);
   if (p === '/rest/v1/rpc/increment_retrieval_stats') return new Response(null, { status: 204 });
   if (p === '/rest/v1/retrieval_log' || p === '/rest/v1/mcp_retrieval_log') return new Response(null, { status: 201 });
   if (p === '/rest/v1/items') return json(fake.items);
@@ -77,7 +80,7 @@ function route(url: URL, body: any): Response {
 beforeEach(() => {
   clearCaches();
   for (const k of ENV_KEYS) { savedEnv[k] = process.env[k]; delete process.env[k]; }
-  fake = { calls: [], adaptive: () => [], phrases: [], items: [], window: () => [], translation: null, rerank: 'fail', segments: {}, segmentIndex: [], coreFails: false };
+  fake = { calls: [], adaptive: () => [], phrases: [], items: [], window: () => [], translation: null, rerank: 'fail', segments: {}, segmentIndex: [], coreFails: false, recall: [], neighbours: [] };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     const raw = init?.body ?? (input instanceof Request ? await input.text() : undefined);
@@ -392,7 +395,7 @@ test('timed results carry moments from the segment search (scoped per item); oth
   assert.equal('moments' in data[1], false);   // web row: no timed segments, no field
   assert.equal('moments' in data[2], false);   // video without matching segments: no field
   const seg = callsTo(SEG);
-  assert.deepEqual(seg.map(c => c.body.p_item_ids).sort(), [['v1'], ['v2'], ['w1']]);   // every result is asked for passages
+  assert.deepEqual(seg.filter(c => c.body.p_item_ids).map(c => c.body.p_item_ids).sort(), [['v1'], ['v2'], ['w1']]);   // every result is asked for passages
   assert.ok(seg.every(c => c.body.p_user_id === USER && c.body.p_mode === 'rrf'));
   assert.match(res.content[0].text, /watch\?v=abcDEF12345&t=754s/);
 });
@@ -423,8 +426,8 @@ test('every result carries passages: articles too, with position, and timed ones
   assert.deepEqual(data[1].passages, [{ text: 'memory is the agent state', n: 31, t: 754, url: 'https://www.youtube.com/watch?v=abcDEF12345&t=754s' }]);
   assert.equal(data[1].moments.length, 1);
   assert.equal('passages' in data[2], false);   // an item with no segments: no field
-  // positions are looked up once, for the picked segments only
-  assert.equal(callsTo('/rest/v1/transcript_segments').length, 1);
+  // one lookup for the positions, one for the neighbours of the short picks
+  assert.equal(callsTo('/rest/v1/transcript_segments').length, 2);
 });
 
 test('passages: the top 3 results get up to 4, later ones 2; long text is cut at a word boundary', async () => {
@@ -457,11 +460,11 @@ test('passages fall back to search_segments when the core RPC is missing; each k
     data = (res.structuredContent as any).data as Array<any>;
     assert.equal('passages' in data[0], false);
     assert.equal(data[0].moments.length, 1);
-    assert.deepEqual(callsTo(SEG).map(c => c.body.p_item_ids), [['v1']]);   // only the timed row is asked
+    assert.deepEqual(callsTo(SEG).filter(c => c.body.p_item_ids).map(c => c.body.p_item_ids), [['v1']]);   // only the timed row is asked
     process.env.SEARCH_MOMENTS = 'off';
     fake.calls = [];
     await searchKnowledge({ query: 'agent memory design three', limit: 2 }, USER);
-    assert.equal(callsTo(SEG).length, 0);
+    assert.equal(callsTo(SEG).filter(c => c.body.p_item_ids).length, 0);
   } finally { delete process.env.SEARCH_PASSAGES; delete process.env.SEARCH_MOMENTS; }
 });
 
@@ -476,4 +479,93 @@ test('moments fail open: unusable segment rows add no field; SEARCH_MOMENTS=off 
     res = await searchKnowledge({ query: 'agent memory design two', limit: 1 }, USER);
     assert.equal('moments' in (res.structuredContent as any).data[0], false);
   } finally { delete process.env.SEARCH_MOMENTS; }
+});
+
+test('segment recall: an item found only through its transcript joins the pool, is judged on that passage and can win', async () => {
+  fake.adaptive = () => tenRows();
+  fake.recall = [
+    { item_id: 'g1', segment_text: 'they rewrite the old   games in Rust on the Bevy engine' },
+    { item_id: 'g1', segment_text: 'a second segment of the same item' },
+    { item_id: 'a3', segment_text: 'a3 also has a matching passage' },
+  ];
+  fake.items = [row('g1', 0, { strategy: 'segment_recall' })];
+  fake.rerank = rankBy(['g1', 'a3']);
+  const res = await searchKnowledge({ query: 'Bevy', limit: 3 }, USER);
+  assert.deepEqual(ids(res).slice(0, 2), ['g1', 'a3']);
+  assert.equal((res.structuredContent as any).data[0].match_type, 'segment_recall');
+  const recall = callsTo(SEG).filter(c => !c.body.p_item_ids);
+  assert.equal(recall.length, 1);
+  assert.equal(recall[0].body.p_user_id, USER);
+  assert.equal(recall[0].body.p_mode, 'rrf');
+  // the re-ranker sees the matching passage in front of the summary, for the new row and for a3; other rows are unchanged
+  const sent = callsTo('/functions/v1/jev-rerank')[0].body.passages as Array<{ id: string; text: string }>;
+  assert.equal(sent.find(x => x.id === 'g1')!.text, 'they rewrite the old games in Rust on the Bevy engine\nsummary g1');
+  assert.equal(sent.find(x => x.id === 'a3')!.text, 'a3 also has a matching passage\nsummary a3');
+  assert.equal(sent.find(x => x.id === 'a0')!.text, 'summary a0');
+  // hydration is owner-scoped
+  assert.ok(callsTo('/rest/v1/items').every(c => c.url.includes(`user_id=eq.${USER}`)));
+});
+
+test('segment recall fails open and has its own kill switch', async () => {
+  fake.adaptive = () => tenRows();
+  fake.recall = [{ item_id: 'g1', segment_text: 'only in the transcript' }];
+  fake.items = [row('g1', 0, { strategy: 'segment_recall' })];
+  fake.rerank = 'fail';
+  let res = await searchKnowledge({ query: 'Bevy engine rewrite', limit: 12 }, USER);
+  assert.equal(ids(res).includes('g1'), false);            // never returned unscored
+  process.env.SEGMENT_RECALL = 'off';
+  fake.calls = [];
+  fake.rerank = rankBy(['g1']);
+  res = await searchKnowledge({ query: 'Bevy engine rewrite two', limit: 3 }, USER);
+  assert.equal(callsTo(SEG).filter(c => !c.body.p_item_ids).length, 0);
+  assert.equal(ids(res).includes('g1'), false);
+  delete process.env.SEGMENT_RECALL;
+  process.env.JEV_RERANK = 'off';
+  fake.calls = [];
+  await searchKnowledge({ query: 'Bevy engine rewrite three', limit: 3 }, USER);
+  assert.equal(callsTo(SEG).filter(c => !c.body.p_item_ids).length, 0);   // inert without the re-ranker
+});
+
+test('passages take turns from the fused and the rrf order; moments keep the fused order', async () => {
+  fake.adaptive = () => [row('v1', 0.9, { source_type: 'youtube', url: 'https://www.youtube.com/watch?v=abcDEF12345' } as any)];
+  const long = (t: string) => `${t} ${'word '.repeat(60)}`.trim();
+  // returned in rrf order; combined_score is the fused score
+  fake.segments = { v1: [
+    { segment_id: 'r1', item_id: 'v1', segment_text: long('rrf one'), start_time_sec: 100, combined_score: 0.40 },
+    { segment_id: 'r2', item_id: 'v1', segment_text: long('rrf two'), start_time_sec: 200, combined_score: 0.70 },
+    { segment_id: 'r3', item_id: 'v1', segment_text: long('rrf three'), start_time_sec: 300, combined_score: 0.35 },
+    { segment_id: 'r4', item_id: 'v1', segment_text: long('rrf four'), start_time_sec: 400, combined_score: 0.60 },
+    { segment_id: 'r5', item_id: 'v1', segment_text: long('rrf five'), start_time_sec: 500, combined_score: 0.31 },
+  ] };
+  const res = await searchKnowledge({ query: 'agent memory design', limit: 1 }, USER);
+  const d = (res.structuredContent as any).data[0];
+  // fused order: r2 r4 r1 r3 r5; rrf order: r1 r2 r3 r4 r5 -> r2, r1, r4, r3
+  assert.deepEqual(d.passages.map((x: any) => x.t), [200, 100, 400, 300]);
+  assert.deepEqual(d.moments.map((x: any) => x.t), [200, 400, 100]);
+});
+
+test('a short pick is joined with its neighbours into one passage; a pick inside it is not repeated', async () => {
+  fake.adaptive = () => [row('w1', 0.9, { url: 'https://example.com/guide' } as any)];
+  fake.segments = { w1: [
+    { segment_id: 's29', item_id: 'w1', segment_text: 'AI Mode). Is', start_time_sec: null, combined_score: 0.5 },
+    { segment_id: 's30', item_id: 'w1', segment_text: 'SEO still relevant for generative AI search? In short, yes!', start_time_sec: null, combined_score: 0.45 },
+    { segment_id: 's02', item_id: 'w1', segment_text: `A long standalone passage. ${'word '.repeat(60)}`, start_time_sec: null, combined_score: 0.4 },
+  ] };
+  fake.segmentIndex = [{ id: 's29', segment_index: 29 }, { id: 's30', segment_index: 30 }, { id: 's02', segment_index: 2 }];
+  fake.neighbours = [
+    { item_id: 'w1', segment_index: 28, text: 'AI Overviews and', start_time_sec: null },
+    { item_id: 'w1', segment_index: 29, text: 'AI Mode). Is', start_time_sec: null },
+    { item_id: 'w1', segment_index: 30, text: 'SEO still relevant for generative AI search? In short, yes!', start_time_sec: null },
+    { item_id: 'w1', segment_index: 31, text: `The same best practices apply. ${'more '.repeat(60)}`, start_time_sec: null },
+    { item_id: 'other', segment_index: 30, text: 'a segment of another item at the same position', start_time_sec: null },
+  ];
+  const res = await searchKnowledge({ query: 'is seo still relevant', limit: 1 }, USER);
+  const passages = (res.structuredContent as any).data[0].passages as Array<{ text: string; n: number }>;
+  assert.equal(passages.length, 2);
+  assert.equal(passages[0].n, 28);
+  assert.match(passages[0].text, /^AI Overviews and AI Mode\)\. Is SEO still relevant for generative AI search\? In short, yes! The same best practices apply\./);
+  assert.equal(passages[0].text.includes('another item'), false);
+  assert.equal(passages[1].n, 2);                           // s30 is inside the first passage and is not returned again
+  const nb = callsTo('/rest/v1/transcript_segments').find(c => c.url.includes('item_id='))!;
+  assert.ok(nb.url.includes('item_id=in.%28w1%29') || nb.url.includes('item_id=in.(w1)'));
 });
