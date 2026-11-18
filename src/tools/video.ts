@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { getVideoById } from '../db/supabase.js';
+import { getVideoById, logMcpRetrieval } from '../db/supabase.js';
 import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedSchema, looseItemSchema } from '../schemas/output.js';
 
@@ -13,6 +13,9 @@ export const getVideoOutputSchema = taintedSchema(looseItemSchema);
 
 export async function getVideo(input: z.infer<typeof videoSchema>, userId: string) {
   const item = await getVideoById(input.id, userId);
+  // A direct read is the strongest sign an agent used the item (item heat reads search_method mcp_get_video).
+  const itemId = (item as { id?: string } | null)?.id;
+  if (itemId) void logMcpRetrieval(userId, input.id, 'mcp_get_video', 1, [itemId]);
   const tainted = wrapWithTaint(item as { taint_level?: number });
   return {
     content: [{ type: 'text' as const, text: formatTaintedResponse(tainted) }],

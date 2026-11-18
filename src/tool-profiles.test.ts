@@ -54,10 +54,10 @@ test('core profile registers 13 tools: the 11 core tools plus the 2 routers', as
 
 test('full profile is unchanged: every tool the role allows, no router tools', async () => {
   const user = await listNames('authenticated', 'full');
-  assert.equal(user.length, 41);
+  assert.equal(user.length, 44);
   assert.deepEqual(new Set(user), new Set(nonAdminTools));
   const admin = await listNames('admin', 'full');
-  assert.equal(admin.length, 55);
+  assert.equal(admin.length, 58);
   for (const n of ROUTER_TOOLS) assert.ok(!admin.includes(n), n);
 });
 
@@ -102,7 +102,7 @@ test('find_tools lists read-only extras only, never writes or admin tools', asyn
     const res = await s.client.callTool({ name: 'braintube_find_tools', arguments: {} });
     const out = res.structuredContent as { tools: Array<{ name: string; input_schema: unknown }>; full_profile_only: string[] };
     const names = out.tools.map((t) => t.name);
-    assert.equal(names.length, 23);
+    assert.equal(names.length, 26);
     for (const n of ['bulk_ingest', 'toggle_bookmark', 'ingest_notion_page', 'set_notion_api_key', 'connect_readwise', 'sync_readwise', 'compile_knowledge']) {
       assert.ok(!names.includes(n), `${n} must not be routable`);
       assert.ok(out.full_profile_only.includes(n), `${n} should be listed as full-only`);
