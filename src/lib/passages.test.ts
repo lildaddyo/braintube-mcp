@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickPassages, passageBudget, passageSchema, MAX_PASSAGES, MAX_PASSAGES_TAIL, PASSAGE_CHARS, MAX_SPAN_SEGMENTS, type Neighbours } from './passages.js';
+import { pickPassages, passageBudget, passageSchema, fallbackPassages, queryTerms, MAX_PASSAGES, MAX_PASSAGES_TAIL, PASSAGE_CHARS, MAX_SPAN_SEGMENTS, type Neighbours } from './passages.js';
 
 test('pickPassages keeps the given order, drops empty and repeated segments and stops at max', () => {
   const rows = [
@@ -62,4 +62,19 @@ test('widening stops at the span limit, never crosses into an earlier passage, a
   assert.equal(out[1].text.includes('s13'), false);         // s13 belongs to the first passage
   assert.ok(out[1].text.startsWith('s14'));
   assert.deepEqual(out[2], { text: 'no position' });
+});
+
+test('fallbackPassages: a short text whole; a long one by the windows holding the most query words', () => {
+  assert.deepEqual(fallbackPassages('  A short   note. ', 'anything'), [{ text: 'A short note.' }]);
+  assert.deepEqual(fallbackPassages('   ', 'anything'), []);
+  const long = `${'alpha beta gamma. '.repeat(60)}The launch date is the ninth of March. ${'delta epsilon. '.repeat(60)}The launch venue is Sofia.`;
+  const out = fallbackPassages(long, 'what is the launch date and venue', 2);
+  assert.equal(out.length, 2);
+  assert.ok(out.some(p => p.text.includes('ninth of March')) && out.some(p => p.text.includes('Sofia')));
+  assert.ok(out.every(p => p.text.length <= PASSAGE_CHARS + 1 && !('n' in p)));
+  // no query word anywhere: the opening of the text, once
+  const none = fallbackPassages(long, 'zzz qqq', 2);
+  assert.equal(none.length, 1);
+  assert.ok(none[0].text.startsWith('alpha beta gamma.'));
+  assert.deepEqual(queryTerms('What is the launch date, and the venue?'), ['launch', 'date', 'venue']);
 });

@@ -13,15 +13,23 @@
 import { z } from 'zod';
 import { searchKnowledge } from './search.js';
 import { getVideo } from './video.js';
+import { dbAdmin } from '../db/supabase.js';
 import { momentSchema, type Moment } from '../lib/moments.js';
 import { passageSchema, type Passage } from '../lib/passages.js';
 
 export const chatgptSearchSchema = z.object({
   query: z.string().min(1).max(500).describe('Search query over your saved BrainTube library, in natural language.'),
+  item_id: z.string().min(1).max(200).optional().describe('Search inside this one item only (an id from a previous result) and return its best-matching passages. Omit to search the whole library.'),
 });
+
+export const FETCH_PAGE_CHARS = 40_000;
+export const FETCH_MAX_PAGE_CHARS = 100_000;
 
 export const chatgptFetchSchema = z.object({
   id: z.string().min(1).max(200).describe('Item id returned by the search tool.'),
+  cursor: z.string().max(40).optional().describe('next_cursor from the previous page of this item (in metadata), to read on. Omit for the first page.'),
+  from_passage: z.number().int().min(0).max(100_000).optional().describe('Start reading the item text at this passage: the `n` of a search passage or a grep match. Omit to read from the top (summary first).'),
+  max_chars: z.number().int().min(2000).max(FETCH_MAX_PAGE_CHARS).default(FETCH_PAGE_CHARS).describe(`Characters of text per page (default ${FETCH_PAGE_CHARS}, max ${FETCH_MAX_PAGE_CHARS}).`),
 });
 
 export const chatgptSearchOutputSchema = z.object({
@@ -53,8 +61,7 @@ export const chatgptFetchOutputSchema = z.object({
 });
 
 const SEARCH_LIMIT = 10;
-// A long transcript can run to megabytes; fetch returns a readable document, not the raw row.
-const MAX_TEXT_CHARS = 100_000;
+const IN_ITEM_PASSAGES = 8;
 
 interface ItemRow {
   id?: unknown;
@@ -120,7 +127,49 @@ export function toSearchResults(rows: ItemRow[]): z.infer<typeof chatgptSearchOu
   return { results };
 }
 
-export function toFetchDocument(row: ItemRow, taintWarning?: string): z.infer<typeof chatgptFetchOutputSchema> {
+export interface FetchPage { offset?: number; maxChars?: number }
+
+/** "c:<offset>" (characters into the document) or "p:<n>" (start at passage n). Anything else is refused with what to pass. */
+export function parseFetchCursor(cursor: string | undefined): { kind: 'chars'; offset: number } | { kind: 'passage'; n: number } | null {
+  if (!cursor) return null;
+  const m = /^([cp]):(\d{1,9})$/.exec(cursor.trim());
+  if (!m) throw new Error('Invalid cursor. Pass the next_cursor value from the previous fetch of this item unchanged, or omit it to start from the top.');
+  return m[1] === 'c' ? { kind: 'chars', offset: Number(m[2]) } : { kind: 'passage', n: Number(m[2]) };
+}
+
+const clock = (sec: number) => {
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}` : `${m}:${String(r).padStart(2, '0')}`;
+};
+
+export interface PassageRow { segment_index: number; text: string | null; start_time_sec?: unknown }
+
+/**
+ * A page of an item's text read passage by passage from `rows` (ordered, starting at the asked passage): whole
+ * passages until `maxChars` is reached, at least one. Timed passages are prefixed with their [m:ss] time.
+ * `next` is the first passage that did not fit, or undefined when `rows` was read to its end.
+ */
+export function passagePage(rows: PassageRow[], maxChars: number): { text: string; first: number; last: number; next?: number } | null {
+  const parts: string[] = [];
+  let used = 0;
+  let last = -1;
+  let next: number | undefined;
+  for (const r of rows) {
+    const body = (r.text ?? '').replace(/\s+/g, ' ').trim();
+    if (!body) { last = r.segment_index; continue; }
+    const start = Number(r.start_time_sec);
+    const line = r.start_time_sec != null && Number.isFinite(start) ? `[${clock(start)}] ${body}` : body;
+    if (parts.length > 0 && used + line.length + 2 > maxChars) { next = r.segment_index; break; }
+    parts.push(line.length > maxChars ? `${line.slice(0, maxChars)}…` : line);
+    used += line.length + 2;
+    last = r.segment_index;
+  }
+  if (parts.length === 0) return null;
+  return { text: parts.join('\n\n'), first: rows[0].segment_index, last, ...(next !== undefined ? { next } : {}) };
+}
+
+export function toFetchDocument(row: ItemRow, taintWarning?: string, page: FetchPage = {}): z.infer<typeof chatgptFetchOutputSchema> {
   const sections: string[] = [];
   const add = (label: string, value: string) => { if (value.trim()) sections.push(`${label}\n${value.trim()}`); };
   add('Summary', str(row.summary));
@@ -130,10 +179,23 @@ export function toFetchDocument(row: ItemRow, taintWarning?: string): z.infer<ty
   }
   add('Description', str(row.description));
   add('Transcript', str(row.full_transcript));
-  let text = sections.join('\n\n') || str(row.title);
-  if (text.length > MAX_TEXT_CHARS) text = `${text.slice(0, MAX_TEXT_CHARS)}\n\n[truncated]`;
-
+  // A long transcript runs to hundreds of thousands of characters: it is read in pages, never cut off silently.
+  const full = sections.join('\n\n') || str(row.title);
+  const maxChars = page.maxChars ?? FETCH_PAGE_CHARS;
+  const offset = Math.min(Math.max(page.offset ?? 0, 0), full.length);
+  let end = Math.min(full.length, offset + maxChars);
+  if (end < full.length) { const sp = full.lastIndexOf(' ', end); if (sp > offset + maxChars * 0.8) end = sp; }
+  let text = full.slice(offset, end);
   const metadata: Record<string, string> = {};
+  if (end < full.length || offset > 0) {
+    metadata.total_chars = String(full.length);
+    metadata.chars = `${offset}-${end}`;
+    if (end < full.length) {
+      metadata.next_cursor = `c:${end}`;
+      text += `\n\n[Characters ${offset} to ${end} of ${full.length}. To read on, call fetch with the same id and cursor "c:${end}".]`;
+    }
+  }
+
   if (str(row.source_type)) metadata.source_type = str(row.source_type);
   if (str(row.channel)) metadata.author = str(row.channel);
   if (str(row.created_at)) metadata.saved_at = str(row.created_at);
@@ -150,13 +212,54 @@ export function toFetchDocument(row: ItemRow, taintWarning?: string): z.infer<ty
 }
 
 export async function chatgptSearch(input: z.infer<typeof chatgptSearchSchema>, userId: string) {
-  const res = await searchKnowledge({ query: input.query, limit: SEARCH_LIMIT }, userId);
+  const res = input.item_id
+    ? await searchKnowledge({ query: input.query, limit: IN_ITEM_PASSAGES, item_id: input.item_id }, userId)
+    : await searchKnowledge({ query: input.query, limit: SEARCH_LIMIT }, userId);
   const rows = (res.structuredContent as { data?: unknown }).data;
   return jsonResult(toSearchResults(Array.isArray(rows) ? (rows as ItemRow[]) : []));
 }
 
+const PASSAGE_ROWS_PER_PAGE = 400;
+
+/** The item's passages from `from` on, as one page of text. The item was already checked to be the caller's. */
+async function fetchFromPassage(row: ItemRow, from: number, maxChars: number, taintWarning?: string): Promise<z.infer<typeof chatgptFetchOutputSchema>> {
+  const itemId = str(row.id);
+  const { data, error } = await dbAdmin
+    .from('transcript_segments')
+    .select('segment_index, text, start_time_sec')
+    .eq('item_id', itemId)
+    .gte('segment_index', from)
+    .order('segment_index', { ascending: true })
+    .limit(PASSAGE_ROWS_PER_PAGE);
+  if (error) throw new Error(`Could not read the item text: ${String(error.message).slice(0, 160)}`);
+  const rows = (data ?? []) as PassageRow[];
+  const page = passagePage(rows, maxChars);
+  if (!page) {
+    const { data: lastRow } = await dbAdmin.from('transcript_segments').select('segment_index').eq('item_id', itemId).order('segment_index', { ascending: false }).limit(1);
+    const max = ((lastRow ?? [])[0] as { segment_index?: number } | undefined)?.segment_index;
+    throw new Error(typeof max === 'number'
+      ? `This item has no passage ${from}: its passages are numbered 0 to ${max}. Pass a from_passage in that range, or omit it to read from the top.`
+      : 'This item is not stored as passages. Omit from_passage (and use cursor for the next page) to read its text.');
+  }
+  // The last row read may not be the item's last passage: a full batch means there may be more after it.
+  const next = page.next ?? (rows.length === PASSAGE_ROWS_PER_PAGE ? rows[rows.length - 1].segment_index + 1 : undefined);
+  const base = toFetchDocument({ ...row, summary: '', core_thesis: '', key_takeaways: [], description: '', full_transcript: '' }, taintWarning);
+  const metadata: Record<string, string> = { ...(base.metadata ?? {}), passages: `${page.first}-${page.last}` };
+  let text = page.text;
+  if (next !== undefined) {
+    metadata.next_cursor = `p:${next}`;
+    text += `\n\n[Passages ${page.first} to ${page.last}. To read on, call fetch with the same id and cursor "p:${next}".]`;
+  }
+  return { ...base, text, metadata };
+}
+
 export async function chatgptFetch(input: z.infer<typeof chatgptFetchSchema>, userId: string) {
+  const cursor = parseFetchCursor(input.cursor);
+  const maxChars = input.max_chars ?? FETCH_PAGE_CHARS;
   const res = await getVideo({ id: input.id }, userId);
   const tainted = res.structuredContent as { data?: ItemRow; taint_warning?: string };
-  return jsonResult(toFetchDocument(tainted.data ?? {}, tainted.taint_warning));
+  const row = tainted.data ?? {};
+  const fromPassage = cursor?.kind === 'passage' ? cursor.n : cursor ? undefined : input.from_passage;
+  if (fromPassage !== undefined) return jsonResult(await fetchFromPassage(row, fromPassage, maxChars, tainted.taint_warning));
+  return jsonResult(toFetchDocument(row, tainted.taint_warning, { offset: cursor?.kind === 'chars' ? cursor.offset : 0, maxChars }));
 }

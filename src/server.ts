@@ -10,6 +10,7 @@ import { directoryMetaFor } from './tool-annotations.js';
 import { withUsageContext } from './lib/usage-log.js';
 import { searchSchema, searchKnowledge, searchKnowledgeOutputSchema } from './tools/search.js';
 import { videoSchema, getVideo, getVideoOutputSchema } from './tools/video.js';
+import { grepSchema, grepLibrary, grepOutputSchema } from './tools/grep.js';
 import { chatgptSearchSchema, chatgptSearch, chatgptSearchOutputSchema, chatgptFetchSchema, chatgptFetch, chatgptFetchOutputSchema } from './tools/chatgpt-compat.js';
 import { recentSchema, listRecent, listRecentOutputSchema } from './tools/recent.js';
 import { statsSchema, getStats, getStatsOutputSchema } from './tools/stats.js';
@@ -539,12 +540,23 @@ export function buildMcpServer(
   server.registerTool(
     'fetch',
     {
-      description: 'Fetch the full text of one saved BrainTube item by the id that search returned: summary, key takeaways, description and transcript, plus its source URL.',
+      description: RETRIEVAL_DESCRIPTIONS.fetch,
       inputSchema: chatgptFetchSchema,
       outputSchema: chatgptFetchOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => chatgptFetch(input, auth.userId)
+  );
+
+  server.registerTool(
+    'grep',
+    {
+      description: RETRIEVAL_DESCRIPTIONS.grep,
+      inputSchema: grepSchema,
+      outputSchema: grepOutputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false }
+    },
+    (input) => grepLibrary(input, auth.userId)
   );
 
   server.registerTool(

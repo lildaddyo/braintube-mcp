@@ -7,7 +7,7 @@ import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 import type { AdaptiveResult } from '../db/supabase.js';
 import { parseQueryFilter, queryTopic, applyFilterPrior, type QueryFilter } from '../lib/query-filter.js';
 import { pickMoments, TIMED_SOURCES, type Moment } from '../lib/moments.js';
-import { pickPassages, passageBudget, MIN_PASSAGE_CHARS, MAX_SPAN_SEGMENTS, type Passage, type PassageSegmentRow, type Neighbours } from '../lib/passages.js';
+import { pickPassages, passageBudget, fallbackPassages, MIN_PASSAGE_CHARS, MAX_SPAN_SEGMENTS, type Passage, type PassageSegmentRow, type Neighbours } from '../lib/passages.js';
 import { detectScript } from '../lib/script.js';
 import { lexicalRpc } from '../lib/lexical-nl.js';
 
@@ -271,8 +271,8 @@ const SEGMENT_ROWS = 16;
 // ranks low: measured 2026-11-19 on the Recall comparison battery, the answer segment sat at position 7 fused / 3 rrf
 // for one question and 2 fused / 6 rrf for another. Non-Latin queries with KO_PGROONGA=on keep the search_segments_nl
 // twin, and any error on the core RPC falls back to search_segments.
-async function itemSegments(query: string, embedding: number[], userId: string, row: AdaptiveResult): Promise<PassageSegmentRow[]> {
-  const args = { p_user_id: userId, p_query: query, p_query_embedding: JSON.stringify(embedding), p_limit: SEGMENT_ROWS, p_item_ids: [row.id] };
+async function itemSegments(query: string, embedding: number[], userId: string, row: AdaptiveResult, limit = SEGMENT_ROWS): Promise<PassageSegmentRow[]> {
+  const args = { p_user_id: userId, p_query: query, p_query_embedding: JSON.stringify(embedding), p_limit: limit, p_item_ids: [row.id] };
   const legacy = lexicalRpc('search_segments', query);
   try {
     let { data, error } = legacy === 'search_segments'
@@ -362,17 +362,38 @@ async function segmentNeighbours(short: Array<{ itemId: string; n: number }>): P
   return out;
 }
 
-export async function attachPassages<T extends AdaptiveResult>(query: string, embedding: number[], userId: string, rows: T[]): Promise<Array<T & { passages?: Passage[]; moments?: Moment[] }>> {
+/** The stored text of items that have no segments, for fallbackPassages. One query; any error -> none. */
+async function itemTexts(ids: string[], userId: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (ids.length === 0) return out;
+  try {
+    const { data, error } = await dbAdmin
+      .from('items')
+      .select('id, description, full_transcript')
+      .eq('user_id', userId)
+      .in('id', ids)
+      .abortSignal(AbortSignal.timeout(1500));
+    if (error) return out;
+    for (const r of (data ?? []) as Array<{ id?: unknown; description?: unknown; full_transcript?: unknown }>) {
+      const text = [r.full_transcript, r.description].find(v => typeof v === 'string' && v.trim().length > 0);
+      if (typeof r.id === 'string' && typeof text === 'string') out.set(r.id, text);
+    }
+  } catch { /* no fallback */ }
+  return out;
+}
+
+/** `perItem`: passages for every row (search inside one item); default: the rank-based budget of a result list. */
+export async function attachPassages<T extends AdaptiveResult>(query: string, embedding: number[], userId: string, rows: T[], perItem?: number): Promise<Array<T & { passages?: Passage[]; moments?: Moment[] }>> {
   const passagesOn = process.env.SEARCH_PASSAGES !== 'off';
   const momentsOn = process.env.SEARCH_MOMENTS !== 'off';
   const isTimed = (r: AdaptiveResult) => TIMED_SOURCES.has(String(r.source_type ?? ''));
   const wanted = rows.slice(0, PASSAGE_ITEMS).filter(r => passagesOn || (momentsOn && isTimed(r)));
   if (wanted.length === 0) return rows;
-  const raw = await Promise.all(wanted.map(r => itemSegments(query, embedding, userId, r)));
+  const raw = await Promise.all(wanted.map(r => itemSegments(query, embedding, userId, r, perItem ? Math.max(SEGMENT_ROWS, perItem * 2 + 4) : SEGMENT_ROWS)));
   const found = raw.map(byBothOrders);                                  // passage order
   const segs = new Map(wanted.map((r, i) => [r.id, found[i]]));
   const fusedSegs = new Map(wanted.map((r, i) => [r.id, byFusedScore(raw[i])]));   // moment order, as before
-  const budget = new Map(rows.map((r, i) => [r.id, passageBudget(i)]));
+  const budget = new Map(rows.map((r, i) => [r.id, perItem ?? passageBudget(i)]));
   const sid = (s: PassageSegmentRow) => (typeof s.segment_id === 'string' ? s.segment_id : null);
   const indexById = passagesOn ? await segmentIndexes(found.flat().map(sid).filter((id): id is string => id !== null)) : new Map<string, number>();
   // Short picks (within each item's budget) get their neighbours, so a fragment becomes a readable passage.
@@ -386,11 +407,17 @@ export async function attachPassages<T extends AdaptiveResult>(query: string, em
       }
     });
   }
-  const neighbours = await segmentNeighbours(short);
-  console.error(`[passages] ${found.filter(m => m.length > 0).length}/${wanted.length} results got segments, ${short.length} short picks widened`);
+  // Items with no segments at all (short notes, captions) still get a passage, cut from their own stored text.
+  const bare = passagesOn ? wanted.filter((r, i) => found[i].length === 0).map(r => r.id) : [];
+  const [neighbours, texts] = await Promise.all([segmentNeighbours(short), itemTexts(bare, userId)]);
+  console.error(`[passages] ${found.filter(m => m.length > 0).length}/${wanted.length} results got segments, ${short.length} short picks widened, ${texts.size} from stored text`);
   return rows.map(r => {
     const list = segs.get(r.id);
-    if (!list || list.length === 0) return r;
+    if (!list || list.length === 0) {
+      const own = texts.get(r.id);
+      const passages = own ? fallbackPassages(own, query, Math.min(budget.get(r.id) ?? 0, 2)) : [];
+      return passages.length > 0 ? { ...r, passages } : r;
+    }
     const meta = r as AdaptiveResult & { url?: string | null; video_id?: string | null };
     const passages = passagesOn ? pickPassages(list, meta.url, meta.video_id, budget.get(r.id), indexById, neighbours.get(r.id)) : [];
     const moments = momentsOn && isTimed(r) ? pickMoments(fusedSegs.get(r.id) ?? list, meta.url, meta.video_id) : [];
@@ -403,9 +430,41 @@ export const searchSchema = z.object({
     'Natural language search query. Examples: "LLM security", "habit formation", "Andrew Huberman sleep", "AI agents"'
   ),
   limit: z.number().int().min(1).max(20).default(5).describe(
-    'Number of results to return (default 5, max 20)'
+    'Number of results to return (default 5, max 20). With item_id: number of passages.'
+  ),
+  item_id: z.string().min(1).max(200).optional().describe(
+    'Search inside this one item only (an id from a previous result) and return its best-matching passages. Omit to search the whole library.'
   )
 });
+
+// -- Search inside one item (retrieval gap vs Recall, 2026-11-19) ---------------------------------------------------
+// With `item_id` the query is not ranked against the library: the one item comes back with its passages that best
+// match the query (up to `limit`, 12 at most), the same passage ranking as a normal search. No confidence block: the
+// item was named by the caller, not found by the search.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const IN_ITEM_MAX_PASSAGES = 12;
+
+async function searchInsideItem(query: string, itemId: string, limit: number, userId: string) {
+  const { data, error } = await dbAdmin
+    .from('items')
+    .select('id, video_id, title, url, source_type, channel, summary, summary_oneliner, tags, created_at, taint_level, provenance')
+    .eq('user_id', userId)
+    .eq(UUID_RE.test(itemId) ? 'id' : 'video_id', itemId)
+    .not('is_adult', 'is', true)
+    .limit(1);
+  if (error) throw new Error(`Search inside item failed: ${String(error.message).slice(0, 160)}`);
+  const item = ((data ?? []) as unknown as AdaptiveResult[])[0];
+  if (!item) throw new Error(`No saved item with id "${itemId}". Use an id returned by search, search_knowledge or grep.`);
+  const embedding = await generateEmbedding(query);
+  const [row] = await attachPassages(query, embedding, userId, [{ ...item, tags: Array.isArray(item.tags) ? item.tags : [] }], Math.min(Math.max(limit, 1), IN_ITEM_MAX_PASSAGES));
+  void logMcpRetrieval(userId, query, 'mcp_search_in_item', 1, [item.id]);
+  const tainted = wrapWithTaint([{ ...row, match_type: 'in_item' }] as unknown as Array<{ taint_level?: number }>);
+  const none = (row as { passages?: unknown[] }).passages?.length ? '' : '[No passage of this item matches the query. fetch returns its full text.]\n\n';
+  return {
+    content: [{ type: 'text' as const, text: none + formatTaintedResponse(tainted) }],
+    structuredContent: tainted as unknown as Record<string, unknown>,
+  };
+}
 
 // Low-confidence flag (retrieval QA 2026-10-04): when the best JEV relevance score is below the threshold, none of the
 // results is likely to answer the query (the library may not contain it). Results are NEVER dropped - only flagged.
@@ -436,6 +495,7 @@ export const searchKnowledgeOutputSchema = taintedListSchema(looseItemSchema).ex
 
 export async function searchKnowledge(input: z.infer<typeof searchSchema>, userId: string) {
   const { query, limit } = input;
+  if (input.item_id) return searchInsideItem(query, input.item_id, limit, userId);
 
   const hasApiKey = !!process.env.OPENAI_API_KEY;
   // Two Hangul syllables or kanji ("영상") are a whole word, so they reach the hybrid path too (not with XL_ALL_SCRIPTS=off).

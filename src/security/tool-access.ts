@@ -46,6 +46,7 @@ export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   search_knowledge:       'authenticated',
   search:                 'authenticated',
   fetch:                  'authenticated',
+  grep:                   'authenticated',
   get_video:              'authenticated',
   list_recent:            'authenticated',
   get_stats:              'authenticated',

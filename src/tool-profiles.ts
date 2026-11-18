@@ -1,7 +1,7 @@
 /**
  * Tool profiles: which tools a session registers in tools/list.
  *
- *   core  — default for every non-admin session. Ten everyday tools plus two
+ *   core  — default for every non-admin session. Eleven everyday tools plus two
  *           router tools (braintube_find_tools / braintube_run_tool) that reach
  *           the other READ-ONLY tools on demand. Keeps tool definitions small:
  *           selection accuracy drops past ~30 tools and large definition sets
@@ -23,6 +23,7 @@ export type ToolProfile = 'core' | 'full';
 export const CORE_TOOLS: ReadonlySet<string> = new Set([
   'search',
   'fetch',
+  'grep',
   'search_knowledge',
   'deep_search',
   'get_video',
