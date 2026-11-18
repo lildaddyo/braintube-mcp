@@ -6,7 +6,8 @@ import { wrapWithTaint, formatTaintedResponse } from '../security/taint.js';
 import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 import type { AdaptiveResult } from '../db/supabase.js';
 import { parseQueryFilter, queryTopic, applyFilterPrior, type QueryFilter } from '../lib/query-filter.js';
-import { pickMoments, TIMED_SOURCES, type Moment, type SegmentRow } from '../lib/moments.js';
+import { pickMoments, TIMED_SOURCES, type Moment } from '../lib/moments.js';
+import { pickPassages, passageBudget, type Passage, type PassageSegmentRow } from '../lib/passages.js';
 import { detectScript } from '../lib/script.js';
 import { lexicalRpc } from '../lib/lexical-nl.js';
 
@@ -221,43 +222,80 @@ async function windowCandidates(topic: string, topicEmbedding: number[], f: Quer
   }
 }
 
-// -- Moments (PH demo, 2026-10-22) --------------------------------------------------------------------
-// For the top timed results (YouTube today) the 1-3 transcript segments that best match the query, as { t, url, quote }
-// with a link that opens the video at that second. Ranked by search_segments (service_role only), the hybrid segment
-// ranking the in-app chat uses, scoped to one item per call so one long video cannot crowd out the others. Added as
-// an extra `moments` field on the row; the row itself is unchanged. Fails open per item (no field). Kill switch:
-// SEARCH_MOMENTS=off.
-const MOMENT_ITEMS = 5;
+// -- Passages and moments (moments: PH demo 2026-10-22; passages: retrieval gap vs Recall, 2026-11-18) ----------------
+// Every returned result gets `passages`: the text of its segments that best match the query (articles, PDFs, notes
+// and posts too), each with its position `n` in the item and, for timed sources, `t` and a `url` at that second.
+// Timed results (YouTube today) also keep `moments` ({ t, url, quote }), built from the same rows. Ranked by
+// search_segments (service_role only), the hybrid segment ranking the in-app chat uses, scoped to one item per call so
+// one long video cannot crowd out the others. The row itself is unchanged. Fails open per item (no field). Kill
+// switches: SEARCH_PASSAGES=off (no passages), SEARCH_MOMENTS=off (no moments); with both off no RPC is made.
+const PASSAGE_ITEMS = 10;
+const SEGMENT_ROWS = 8;
 
-async function itemMoments(query: string, embedding: number[], userId: string, row: AdaptiveResult): Promise<Moment[]> {
+// Segment ranking: reciprocal-rank fusion of the dense and the lexical list (search_segments_core, mode 'rrf'), so a
+// passage that holds the query's rare words ranks beside the semantically closest ones (measured 2026-11-19: the answer
+// segment moved from position 7 to 3 of 364). Non-Latin queries with KO_PGROONGA=on keep the search_segments_nl twin,
+// and any error on the core RPC falls back to search_segments (the ranking moments used before).
+async function itemSegments(query: string, embedding: number[], userId: string, row: AdaptiveResult): Promise<PassageSegmentRow[]> {
+  const args = { p_user_id: userId, p_query: query, p_query_embedding: JSON.stringify(embedding), p_limit: SEGMENT_ROWS, p_item_ids: [row.id] };
+  const legacy = lexicalRpc('search_segments', query);
   try {
-    const { data, error } = await dbAdmin
-      .rpc(lexicalRpc('search_segments', query), {
-        p_user_id: userId, p_query: query, p_query_embedding: JSON.stringify(embedding), p_limit: 6, p_item_ids: [row.id],
-      })
-      .abortSignal(AbortSignal.timeout(2500));
+    let { data, error } = legacy === 'search_segments'
+      ? await dbAdmin.rpc('search_segments_core', { ...args, p_mode: 'rrf' }).abortSignal(AbortSignal.timeout(2500))
+      : await dbAdmin.rpc(legacy, args).abortSignal(AbortSignal.timeout(2500));
+    if (error && legacy === 'search_segments') {
+      ({ data, error } = await dbAdmin.rpc(legacy, args).abortSignal(AbortSignal.timeout(2500)));
+    }
     if (error) {
-      console.error(`[moments] skipped ${row.id}: ${String(error.message).slice(0, 120)}`);
+      console.error(`[passages] skipped ${row.id}: ${String(error.message).slice(0, 120)}`);
       return [];
     }
-    const r = row as AdaptiveResult & { url?: string | null; video_id?: string | null };
-    return pickMoments(((data ?? []) as SegmentRow[]).filter(s => s.item_id === row.id), r.url, r.video_id);
+    return ((data ?? []) as PassageSegmentRow[]).filter(s => s.item_id === row.id);
   } catch (err) {
-    console.error(`[moments] skipped ${row.id}: ${err instanceof Error ? err.name : 'error'}`);
+    console.error(`[passages] skipped ${row.id}: ${err instanceof Error ? err.name : 'error'}`);
     return [];
   }
 }
 
-export async function attachMoments<T extends AdaptiveResult>(query: string, embedding: number[], userId: string, rows: T[]): Promise<Array<T & { moments?: Moment[] }>> {
-  if (process.env.SEARCH_MOMENTS === 'off') return rows;
-  const timed = rows.filter(r => TIMED_SOURCES.has(String(r.source_type ?? ''))).slice(0, MOMENT_ITEMS);
-  if (timed.length === 0) return rows;
-  const found = await Promise.all(timed.map(r => itemMoments(query, embedding, userId, r)));
-  const byId = new Map(timed.map((r, i) => [r.id, found[i]]));
-  console.error(`[moments] ${found.filter(m => m.length > 0).length}/${timed.length} timed results got moments`);
+/** Position of each segment inside its item (segment_index), for the passages' `n`. Any error -> empty map (no `n`). */
+async function segmentIndexes(segmentIds: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (segmentIds.length === 0) return out;
+  try {
+    const { data, error } = await dbAdmin
+      .from('transcript_segments')
+      .select('id, segment_index')
+      .in('id', segmentIds)
+      .abortSignal(AbortSignal.timeout(1500));
+    if (error) return out;
+    for (const r of (data ?? []) as Array<{ id?: unknown; segment_index?: unknown }>) {
+      if (typeof r.id === 'string' && typeof r.segment_index === 'number') out.set(r.id, r.segment_index);
+    }
+  } catch { /* no positions */ }
+  return out;
+}
+
+export async function attachPassages<T extends AdaptiveResult>(query: string, embedding: number[], userId: string, rows: T[]): Promise<Array<T & { passages?: Passage[]; moments?: Moment[] }>> {
+  const passagesOn = process.env.SEARCH_PASSAGES !== 'off';
+  const momentsOn = process.env.SEARCH_MOMENTS !== 'off';
+  const isTimed = (r: AdaptiveResult) => TIMED_SOURCES.has(String(r.source_type ?? ''));
+  const wanted = rows.slice(0, PASSAGE_ITEMS).filter(r => passagesOn || (momentsOn && isTimed(r)));
+  if (wanted.length === 0) return rows;
+  const found = await Promise.all(wanted.map(r => itemSegments(query, embedding, userId, r)));
+  const segs = new Map(wanted.map((r, i) => [r.id, found[i]]));
+  const budget = new Map(rows.map((r, i) => [r.id, passageBudget(i)]));
+  const picked = passagesOn
+    ? found.flatMap((list, i) => list.slice(0, budget.get(wanted[i].id) ?? 0).map(s => s.segment_id).filter((id): id is string => typeof id === 'string'))
+    : [];
+  const indexById = await segmentIndexes(picked);
+  console.error(`[passages] ${found.filter(m => m.length > 0).length}/${wanted.length} results got segments`);
   return rows.map(r => {
-    const m = byId.get(r.id);
-    return m && m.length > 0 ? { ...r, moments: m } : r;
+    const list = segs.get(r.id);
+    if (!list || list.length === 0) return r;
+    const meta = r as AdaptiveResult & { url?: string | null; video_id?: string | null };
+    const passages = passagesOn ? pickPassages(list, meta.url, meta.video_id, budget.get(r.id), indexById) : [];
+    const moments = momentsOn && isTimed(r) ? pickMoments(list, meta.url, meta.video_id) : [];
+    return { ...r, ...(passages.length > 0 ? { passages } : {}), ...(moments.length > 0 ? { moments } : {}) };
   });
 }
 
@@ -377,7 +415,7 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
           const ranked = await jevRerank(rerankQuery, results, 10, userId);
           results = (ranked === results ? results : [...applyFilterPrior(ranked.slice(0, 10), filter), ...ranked.slice(10)]).slice(0, limit);
         }
-        results = await attachMoments(baseQuery, enEmbedding ?? embedding, userId, results);
+        results = await attachPassages(baseQuery, enEmbedding ?? embedding, userId, results);
         // Use strategy as match_type so callers can see which retrieval path was used
         const withMatchType = results.map(r => ({
           ...r,

@@ -53,3 +53,14 @@ test('search results pass video moments through and stay schema-valid', () => {
   assert.equal('moments' in out.results[1], false);
   assert.equal(chatgptSearchOutputSchema.safeParse(out).success, true);
 });
+
+test('search results pass passages through, with the item\'s provenance and taint for the envelope', () => {
+  const passages = [{ text: 'the matching text', n: 4 }];
+  const out = toSearchResults([
+    { id: 'a', title: 'T', url: 'https://x.test/a', passages, provenance: 'third_party', taint_level: 1 },
+    { id: 'b', title: 'W', url: 'https://x.test/b', passages: [], taint_level: 1 },
+  ]);
+  assert.deepEqual(out.results[0], { id: 'a', title: 'T', url: 'https://x.test/a', passages, provenance: 'third_party', taint_level: 1 });
+  assert.deepEqual(out.results[1], { id: 'b', title: 'W', url: 'https://x.test/b' });
+  assert.equal(chatgptSearchOutputSchema.safeParse(out).success, true);
+});

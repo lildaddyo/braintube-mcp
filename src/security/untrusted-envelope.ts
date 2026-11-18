@@ -28,6 +28,14 @@ export const CONTENT_KEYS = [
 const CONTENT_KEY_SET = new Set<string>(CONTENT_KEYS);
 
 /**
+ * Lists of passage objects ({ text | quote, ... }) that belong to the item that holds them. They are saved text too,
+ * so they travel inside the item's own envelope: one trust label per result, not one per passage (2026-11-19; each
+ * moment quote used to get its own label or its own ~290-character text envelope).
+ */
+export const CHILD_LIST_KEYS = ['passages', 'moments'] as const;
+const CHILD_LIST_KEY_SET = new Set<string>(CHILD_LIST_KEYS);
+
+/**
  * Tools whose output carries no saved text (counts, metrics, admin data, the router's tool list).
  * Every other read-only tool is enveloped: the default is to treat output as untrusted.
  */
@@ -73,9 +81,18 @@ function hasContent(v: Json): boolean {
   return false;
 }
 
+function hasOwnContent(obj: Record<string, Json>): boolean {
+  return Object.entries(obj).some(([k, v]) => CONTENT_KEY_SET.has(k) && hasContent(v));
+}
+
+/** A non-empty list of objects that hold saved text under a known child-list key. */
+function isChildList(k: string, v: Json): v is Array<Record<string, Json>> {
+  return CHILD_LIST_KEY_SET.has(k) && Array.isArray(v) && v.length > 0 && v.every((x) => isPlainObject(x)) && v.some((x) => hasOwnContent(x as Record<string, Json>));
+}
+
 function isItemLike(obj: Record<string, Json>): boolean {
   if (obj.trust === 'untrusted_data') return false; // already enveloped
-  return Object.entries(obj).some(([k, v]) => CONTENT_KEY_SET.has(k) && hasContent(v));
+  return hasOwnContent(obj) || Object.entries(obj).some(([k, v]) => isChildList(k, v));
 }
 
 /** Provenance to report for a row that may predate the provenance column. */
@@ -135,6 +152,7 @@ export function envelopeStructured(value: Json, mode: EnvelopeMode, stats: Envel
     const body: Record<string, Json> = {};
     for (const [k, v] of Object.entries(value)) {
       if (CONTENT_KEY_SET.has(k) && (typeof v === 'string' || Array.isArray(v))) body[k] = v;
+      else if (isChildList(k, v)) body[k] = v;   // passages / moments: inside this item's envelope, not one each
       else rest[k] = v;
     }
     return { ...recurse(rest), trust: 'untrusted_data', provenance, taint_level: taint, [UNTRUSTED_TAG]: body };

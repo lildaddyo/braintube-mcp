@@ -33,6 +33,8 @@ type Fake = {
   translation: string | null;
   rerank: ((query: string, ids: string[]) => Record<string, number>) | 'fail';
   segments: Record<string, Array<Record<string, unknown>>>;
+  segmentIndex: Array<{ id: string; segment_index: number }>;
+  coreFails: boolean;
 };
 let fake: Fake;
 const realFetch = globalThis.fetch;
@@ -55,7 +57,12 @@ function route(url: URL, body: any): Response {
   if (p === '/rest/v1/rpc/adaptive_search') return json(fake.adaptive(body.search_query));
   if (p === '/rest/v1/rpc/search_item_phrases') return json(fake.phrases.map(id => ({ id })));
   if (p === '/rest/v1/rpc/search_items_window') return json(fake.window(body));
+  if (p === '/rest/v1/rpc/search_segments_core') {
+    if (fake.coreFails) return json({ message: 'function search_segments_core does not exist' }, 404);
+    return json((body.p_item_ids as string[]).flatMap(id => fake.segments[id] ?? []));
+  }
   if (p === '/rest/v1/rpc/search_segments') return json((body.p_item_ids as string[]).flatMap(id => fake.segments[id] ?? []));
+  if (p === '/rest/v1/transcript_segments') return json(fake.segmentIndex);
   if (p === '/rest/v1/rpc/increment_retrieval_stats') return new Response(null, { status: 204 });
   if (p === '/rest/v1/retrieval_log' || p === '/rest/v1/mcp_retrieval_log') return new Response(null, { status: 201 });
   if (p === '/rest/v1/items') return json(fake.items);
@@ -70,7 +77,7 @@ function route(url: URL, body: any): Response {
 beforeEach(() => {
   clearCaches();
   for (const k of ENV_KEYS) { savedEnv[k] = process.env[k]; delete process.env[k]; }
-  fake = { calls: [], adaptive: () => [], phrases: [], items: [], window: () => [], translation: null, rerank: 'fail', segments: {} };
+  fake = { calls: [], adaptive: () => [], phrases: [], items: [], window: () => [], translation: null, rerank: 'fail', segments: {}, segmentIndex: [], coreFails: false };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     const raw = init?.body ?? (input instanceof Request ? await input.text() : undefined);
@@ -359,7 +366,9 @@ test('a failed re-rank is not cached: the next search calls jev-rerank again', a
   assert.equal(ids(res)[0], 'a7');
 });
 
-test('timed results carry moments from search_segments (scoped per item); other rows are unchanged', async () => {
+const SEG = '/rest/v1/rpc/search_segments_core';
+
+test('timed results carry moments from the segment search (scoped per item); other rows have none', async () => {
   fake.adaptive = () => [
     row('v1', 0.9, { source_type: 'youtube', url: 'https://www.youtube.com/watch?v=abcDEF12345' } as any),
     row('w1', 0.8),
@@ -380,23 +389,91 @@ test('timed results carry moments from search_segments (scoped per item); other 
     { t: 754, url: 'https://www.youtube.com/watch?v=abcDEF12345&t=754s', quote: 'memory is the agent state' },
     { t: 1200, url: 'https://www.youtube.com/watch?v=abcDEF12345&t=1200s', quote: 'later point' },
   ]);
-  assert.equal('moments' in data[1], false);   // web row: not asked, no field
+  assert.equal('moments' in data[1], false);   // web row: no timed segments, no field
   assert.equal('moments' in data[2], false);   // video without matching segments: no field
-  const seg = callsTo('/rest/v1/rpc/search_segments');
-  assert.deepEqual(seg.map(c => c.body.p_item_ids).sort(), [['v1'], ['v2']]);
-  assert.ok(seg.every(c => c.body.p_user_id === USER));
+  const seg = callsTo(SEG);
+  assert.deepEqual(seg.map(c => c.body.p_item_ids).sort(), [['v1'], ['v2'], ['w1']]);   // every result is asked for passages
+  assert.ok(seg.every(c => c.body.p_user_id === USER && c.body.p_mode === 'rrf'));
   assert.match(res.content[0].text, /watch\?v=abcDEF12345&t=754s/);
 });
 
-test('moments fail open: unusable segment rows add no field; SEARCH_MOMENTS=off skips the RPC', async () => {
+test('every result carries passages: articles too, with position, and timed ones with t and url', async () => {
+  fake.adaptive = () => [
+    row('w1', 0.9, { url: 'https://example.com/essay' } as any),
+    row('v1', 0.8, { source_type: 'youtube', url: 'https://www.youtube.com/watch?v=abcDEF12345' } as any),
+    row('n1', 0.7, { source_type: 'note' }),
+  ];
+  fake.segments = {
+    w1: [
+      { segment_id: 's-w1-b', item_id: 'w1', segment_text: 'Reach the   frontier of knowledge and notice the gaps.', start_time_sec: null, combined_score: 0.5 },
+      { segment_id: 's-w1-a', item_id: 'w1', segment_text: 'Pick a field that matches your aptitude.', start_time_sec: null, combined_score: 0.2 },   // no score floor for passages
+      { segment_id: 's-w1-a', item_id: 'w1', segment_text: 'Pick a field that matches your aptitude.', start_time_sec: null, combined_score: 0.2 },   // duplicate row
+      { segment_id: 's-w1-e', item_id: 'w1', segment_text: '   ', start_time_sec: null, combined_score: 0.2 },                                        // empty
+    ],
+    v1: [{ segment_id: 's-v1-a', item_id: 'v1', segment_text: 'memory is the agent state', start_time_sec: '754.6', combined_score: 0.62 }],
+  };
+  fake.segmentIndex = [{ id: 's-w1-b', segment_index: 7 }, { id: 's-w1-a', segment_index: 2 }, { id: 's-v1-a', segment_index: 31 }];
+  const res = await searchKnowledge({ query: 'frontier of knowledge', limit: 3 }, USER);
+  const data = (res.structuredContent as any).data as Array<any>;
+  assert.deepEqual(data[0].passages, [
+    { text: 'Reach the frontier of knowledge and notice the gaps.', n: 7 },
+    { text: 'Pick a field that matches your aptitude.', n: 2 },
+  ]);
+  assert.equal('moments' in data[0], false);
+  assert.deepEqual(data[1].passages, [{ text: 'memory is the agent state', n: 31, t: 754, url: 'https://www.youtube.com/watch?v=abcDEF12345&t=754s' }]);
+  assert.equal(data[1].moments.length, 1);
+  assert.equal('passages' in data[2], false);   // an item with no segments: no field
+  // positions are looked up once, for the picked segments only
+  assert.equal(callsTo('/rest/v1/transcript_segments').length, 1);
+});
+
+test('passages: the top 3 results get up to 4, later ones 2; long text is cut at a word boundary', async () => {
+  fake.adaptive = () => Array.from({ length: 5 }, (_, i) => row(`a${i}`, 1 - i / 100));
+  const many = (id: string) => Array.from({ length: 6 }, (_, k) => ({ segment_id: `${id}-${k}`, item_id: id, segment_text: `passage ${k} ${'word '.repeat(k === 0 ? 400 : 3)}`, start_time_sec: null, combined_score: 0.5 }));
+  fake.segments = Object.fromEntries(['a0', 'a1', 'a2', 'a3', 'a4'].map(id => [id, many(id)]));
+  const res = await searchKnowledge({ query: 'agent memory design', limit: 5 }, USER);
+  const data = (res.structuredContent as any).data as Array<any>;
+  assert.deepEqual(data.map(r => r.passages.length), [4, 4, 4, 2, 2]);
+  assert.ok(data[0].passages[0].text.length <= 701 && data[0].passages[0].text.endsWith('…'));
+});
+
+test('passages fall back to search_segments when the core RPC is missing; each kill switch works alone', async () => {
+  fake.adaptive = () => [row('v1', 0.9, { source_type: 'youtube', url: 'https://www.youtube.com/watch?v=abcDEF12345' } as any), row('w1', 0.8)];
+  fake.segments = {
+    v1: [{ segment_id: 's1', item_id: 'v1', segment_text: 'memory is the agent state', start_time_sec: '754.6', combined_score: 0.62 }],
+    w1: [{ segment_id: 's2', item_id: 'w1', segment_text: 'an article passage', start_time_sec: null, combined_score: 0.4 }],
+  };
+  fake.coreFails = true;
+  let res = await searchKnowledge({ query: 'agent memory design', limit: 2 }, USER);
+  let data = (res.structuredContent as any).data as Array<any>;
+  assert.equal(data[0].passages[0].text, 'memory is the agent state');
+  assert.equal(data[1].passages[0].text, 'an article passage');
+  assert.equal(callsTo('/rest/v1/rpc/search_segments').length, 2);
+  fake.coreFails = false;
+  process.env.SEARCH_PASSAGES = 'off';
+  try {
+    fake.calls = [];
+    res = await searchKnowledge({ query: 'agent memory design two', limit: 2 }, USER);
+    data = (res.structuredContent as any).data as Array<any>;
+    assert.equal('passages' in data[0], false);
+    assert.equal(data[0].moments.length, 1);
+    assert.deepEqual(callsTo(SEG).map(c => c.body.p_item_ids), [['v1']]);   // only the timed row is asked
+    process.env.SEARCH_MOMENTS = 'off';
+    fake.calls = [];
+    await searchKnowledge({ query: 'agent memory design three', limit: 2 }, USER);
+    assert.equal(callsTo(SEG).length, 0);
+  } finally { delete process.env.SEARCH_PASSAGES; delete process.env.SEARCH_MOMENTS; }
+});
+
+test('moments fail open: unusable segment rows add no field; SEARCH_MOMENTS=off keeps passages only', async () => {
   fake.adaptive = () => [row('v1', 0.9, { source_type: 'youtube', url: 'https://www.youtube.com/watch?v=abcDEF12345' } as any)];
   fake.segments = { v1: [{ item_id: 'v1', segment_text: 'x', start_time_sec: 'not-a-number', combined_score: 0.9 }] };
   let res = await searchKnowledge({ query: 'agent memory design', limit: 1 }, USER);
   assert.equal('moments' in (res.structuredContent as any).data[0], false);
+  assert.deepEqual((res.structuredContent as any).data[0].passages, [{ text: 'x' }]);   // the text is still a passage, without a time
   process.env.SEARCH_MOMENTS = 'off';
   try {
-    fake.calls = [];
     res = await searchKnowledge({ query: 'agent memory design two', limit: 1 }, USER);
-    assert.equal(callsTo('/rest/v1/rpc/search_segments').length, 0);
+    assert.equal('moments' in (res.structuredContent as any).data[0], false);
   } finally { delete process.env.SEARCH_MOMENTS; }
 });
