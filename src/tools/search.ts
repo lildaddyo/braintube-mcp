@@ -554,7 +554,41 @@ export function confidenceOf(rows: Array<{ relevance_score?: number | null }>): 
   return { top_relevance: top, low_confidence: top < threshold, threshold };
 }
 
+// -- Slim result rows (payload, 2026-11-19) ------------------------------------------------------------------
+// Rows no longer carry the retriever's internals (full_text_rank, semantic_rank, rrf_score, strategy, similarity,
+// a null centrality_score): they told an agent nothing and were on every row. match_type (which path found the row)
+// and relevance_score stay. SEARCH_RANK_FIELDS=on keeps them, for retrieval QA.
+const RANK_FIELDS = ['full_text_rank', 'semantic_rank', 'rrf_score', 'strategy', 'similarity'] as const;
+
+export function slimRow<T extends Record<string, unknown>>(row: T): Record<string, unknown> {
+  if (process.env.SEARCH_RANK_FIELDS === 'on') return row;
+  const out: Record<string, unknown> = { ...row };
+  for (const k of RANK_FIELDS) delete out[k];
+  if (out.centrality_score == null) delete out.centrality_score;
+  return out;
+}
+
+// Rows the re-ranker scored under this are not returned (they were: a query the library cannot answer came back with
+// rows at 0.02 and 0.015, flagged but still paid for in tokens). The best row is always kept, so a low-confidence
+// answer still shows what the closest item was. Only rows that carry a score are judged; without a re-rank nothing is
+// dropped. Env: SEARCH_MIN_RELEVANCE (number, or 'off').
+export function minRelevance(): number | null {
+  const raw = process.env.SEARCH_MIN_RELEVANCE;
+  if (raw === 'off') return null;
+  const n = raw === undefined ? 0.05 : Number(raw);
+  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.05;
+}
+
+export function dropWeakRows<T extends { relevance_score?: number | null }>(rows: T[]): { rows: T[]; omitted: number } {
+  const min = minRelevance();
+  if (min === null) return { rows, omitted: 0 };
+  const kept = rows.filter((r, i) => i === 0 || typeof r.relevance_score !== 'number' || r.relevance_score >= min);
+  return { rows: kept, omitted: rows.length - kept.length };
+}
+
 export const searchKnowledgeOutputSchema = taintedListSchema(looseItemSchema).extend({
+  // Rows left out because the re-ranker scored them under SEARCH_MIN_RELEVANCE.
+  omitted_low_relevance: z.number().optional(),
   confidence: z.object({
     top_relevance: z.number(),
     low_confidence: z.boolean(),
@@ -655,21 +689,22 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
         }
         results = await attachPassages(baseQuery, enEmbedding ?? embedding, userId, results);
         results = await recheckOnPassages(rerankQuery, results, userId);
-        // Use strategy as match_type so callers can see which retrieval path was used
-        const withMatchType = results.map(r => ({
+        const confidence = confidenceOf(results as Array<{ relevance_score?: number | null }>);
+        const { rows: kept, omitted } = dropWeakRows(results as Array<AdaptiveResult & { relevance_score?: number | null }>);
+        // match_type tells callers which retrieval path found the row; the other ranking internals are dropped (slimRow).
+        const withMatchType = kept.map(r => slimRow({
           ...r,
           taint_level:      r.taint_level ?? 0,
           match_type:       r.strategy ?? 'adaptive',
-          centrality_score: r.centrality_score ?? null,
         }));
-        const tainted = wrapWithTaint(withMatchType);
-        const confidence = confidenceOf(results as Array<{ relevance_score?: number | null }>);
+        const tainted = wrapWithTaint(withMatchType as Array<{ taint_level?: number }>);
         const note = confidence?.low_confidence
           ? `[Low confidence] None of these results looks like a direct answer (top relevance ${confidence.top_relevance.toFixed(2)} < ${confidence.threshold}). Your library may not contain this.\n\n`
           : '';
+        const left = omitted > 0 ? `\n[${omitted} weaker result${omitted === 1 ? '' : 's'} left out (relevance under ${minRelevance()}).]` : '';
         return {
-          content: [{ type: 'text' as const, text: note + formatTaintedResponse(tainted) }],
-          structuredContent: (confidence ? { ...tainted, confidence } : tainted) as unknown as Record<string, unknown>
+          content: [{ type: 'text' as const, text: note + formatTaintedResponse(tainted, true) + left }],
+          structuredContent: { ...tainted, ...(confidence ? { confidence } : {}), ...(omitted > 0 ? { omitted_low_relevance: omitted } : {}) } as unknown as Record<string, unknown>
         };
       }
       console.error('[search] adaptive returned 0 results, falling back to keyword');

@@ -36,6 +36,21 @@ export async function knowledgeHealth(_input: z.infer<typeof knowledgeHealthSche
     health_score?: number;
   } | null;
 
+  // The RPC counts every unarchived item; get_stats, search and every other tool leave adult-flagged items out, so the
+  // two totals disagreed (1,606 vs 1,603 on 2026-11-18). Report the total the other tools use and say what was left out.
+  if (h && typeof h.total_items === 'number') {
+    const { count, error: adultError } = await dbAdmin
+      .from('items')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('is_adult', true)
+      .not('is_archived', 'is', true);
+    if (!adultError && typeof count === 'number' && count > 0) {
+      h.total_items = Math.max(0, h.total_items - count);
+      (h as Record<string, unknown>).excluded_adult_items = count;
+    }
+  }
+
   if (!h) {
     return {
       content: [{ type: 'text' as const, text: 'No health data returned.' }],

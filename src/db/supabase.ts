@@ -79,27 +79,34 @@ export async function semanticSearch(query: string, userId: string, limit = 5) {
 
 // ─── Get single item ─────────────────────────────────────────────────────────
 
+const ITEM_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Thrown when the caller has no item with that id; the message says what to pass instead (shown to the model as is). */
+export class ItemNotFoundError extends Error {
+  constructor(id: string) {
+    super(`No saved item with id "${id.slice(0, 80)}". Pass an id returned by search, search_knowledge, grep or list_recent (a UUID), or a YouTube video id.`);
+    this.name = 'ItemNotFoundError';
+  }
+}
+
 export async function getVideoById(id: string, userId: string) {
-  // Try YouTube video_id first
-  let { data, error } = await dbAdmin
+  // A UUID is the internal id; anything else is tried as a YouTube video id. limit(1), newest first: .single() failed
+  // with "Cannot coerce the result to a single JSON object" both for no row and for a video saved twice.
+  const column = ITEM_UUID.test(id) ? 'id' : 'video_id';
+  const { data: rows, error } = await dbAdmin
     .from('items')
     .select('*').eq('is_adult', false)
     .eq('user_id', userId)
-    .eq('video_id', id)
-    .single();
+    .eq(column, id)
+    .order('created_at', { ascending: false })
+    .limit(1);
 
-  // Fallback to internal UUID
-  if (!data) {
-    ({ data, error } = await dbAdmin
-      .from('items')
-      .select('*').eq('is_adult', false)
-      .eq('user_id', userId)
-      .eq('id', id)
-      .single());
+  if (error) {
+    console.error(`[db] getVideoById failed: ${error.message}`);
+    throw new Error('The item could not be read right now. Try again in a moment.');
   }
-
-  if (error) throw new Error(`Item not found: ${error.message}`);
-  if (!data) throw new Error(`Item not found for id: ${id}`);
+  const data = (rows ?? [])[0];
+  if (!data) throw new ItemNotFoundError(id);
 
   const tagsMap = await fetchTagsForItems([data.id]);
   return { ...data, tags: tagsMap[data.id] ?? [] };
