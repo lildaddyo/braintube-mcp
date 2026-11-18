@@ -32,6 +32,8 @@ type Fake = {
   window: (body: any) => Row[];
   translation: string | null;
   rerank: ((query: string, ids: string[]) => Record<string, number>) | 'fail';
+  recheck: ((ids: string[]) => Record<string, number>) | 'fail';
+  rechecks: any[];
   segments: Record<string, Array<Record<string, unknown>>>;
   segmentIndex: Array<{ id: string; segment_index: number }>;
   coreFails: boolean;
@@ -42,7 +44,7 @@ type Fake = {
 };
 let fake: Fake;
 const realFetch = globalThis.fetch;
-const ENV_KEYS = ['JEV_RERANK', 'PHRASE_RECALL', 'SEGMENT_RECALL', 'QUERY_FILTER', 'SEARCH_LOW_CONFIDENCE_THRESHOLD', 'XL_ALL_SCRIPTS'] as const;
+const ENV_KEYS = ['JEV_RERANK', 'PHRASE_RECALL', 'SEGMENT_RECALL', 'CONFIDENCE_RECHECK', 'QUERY_FILTER', 'SEARCH_LOW_CONFIDENCE_THRESHOLD', 'XL_ALL_SCRIPTS'] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -77,6 +79,14 @@ function route(url: URL, body: any): Response {
     return json(fake.items);
   }
   if (p === '/functions/v1/jev-rerank') {
+    // The confidence recheck sends the returned passages, not summaries ("summary <id>" in these fixtures).
+    const isRecheck = (body.passages as Array<{ text: string }>).every(x => !String(x.text).includes('summary '));
+    if (isRecheck) {
+      fake.rechecks.push(body);
+      if (fake.recheck === 'fail') return json({ error: 'boom' }, 500);
+      const again = fake.recheck(body.passages.map((x: any) => x.id));
+      return json({ model: 'fake', ms: 1, scores: Object.entries(again).map(([id, score]) => ({ id, score })) });
+    }
     if (fake.rerank === 'fail') return json({ error: 'boom' }, 500);
     const scores = fake.rerank(body.query, body.passages.map((x: any) => x.id));
     return json({ model: 'fake', ms: 1, scores: Object.entries(scores).map(([id, score]) => ({ id, score })) });
@@ -87,7 +97,7 @@ function route(url: URL, body: any): Response {
 beforeEach(() => {
   clearCaches();
   for (const k of ENV_KEYS) { savedEnv[k] = process.env[k]; delete process.env[k]; }
-  fake = { calls: [], adaptive: () => [], phrases: [], items: [], window: () => [], translation: null, rerank: 'fail', segments: {}, segmentIndex: [], coreFails: false, recall: [], neighbours: [], texts: [], oneItem: [] };
+  fake = { calls: [], adaptive: () => [], phrases: [], items: [], window: () => [], translation: null, rerank: 'fail', recheck: () => ({}), rechecks: [], segments: {}, segmentIndex: [], coreFails: false, recall: [], neighbours: [], texts: [], oneItem: [] };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     const raw = init?.body ?? (input instanceof Request ? await input.text() : undefined);
@@ -619,4 +629,65 @@ test('item_id that is not the caller\'s item is refused with what to pass', asyn
     searchKnowledge({ query: 'anything at all', limit: 5, item_id: '00000000-0000-4000-8000-00000000dead' }, USER),
     /No saved item with id "00000000-0000-4000-8000-00000000dead"\. Use an id returned by search/,
   );
+});
+
+// Three rows the re-ranker scores low on their summaries; each has passages to be judged again.
+function lowScoredWithPassages() {
+  fake.adaptive = () => [row('a0', 0.9), row('a1', 0.8), row('a2', 0.7), row('a3', 0.6)];
+  fake.rerank = () => ({ a0: 0.5, a1: 0.45, a2: 0.3, a3: 0.2 });
+  const seg = (id: string, text: string) => [{ segment_id: `s-${id}`, item_id: id, segment_text: `${text} ${'word '.repeat(60)}`, start_time_sec: null, combined_score: 0.5 }];
+  fake.segments = { a0: seg('a0', 'passage of a0'), a1: seg('a1', 'the gains were made in only 18 days'), a2: seg('a2', 'passage of a2'), a3: seg('a3', 'passage of a3') };
+}
+
+test('confidence recheck: a low top score is judged again on the returned passages; the answer row moves up and the flag clears', async () => {
+  lowScoredWithPassages();
+  fake.recheck = () => ({ a0: 0.4, a1: 0.97, a2: 0.1 });
+  const res = await searchKnowledge({ query: 'how many days until the gains', limit: 4 }, USER);
+  const data = (res.structuredContent as any).data as Array<any>;
+  assert.deepEqual(data.map(r => r.id), ['a1', 'a0', 'a2', 'a3']);
+  assert.deepEqual(data.map(r => r.relevance_score), [0.97, 0.5, 0.3, 0.2]);        // a score only ever goes up
+  assert.deepEqual((res.structuredContent as any).confidence, { top_relevance: 0.97, low_confidence: false, threshold: 0.6 });
+  assert.doesNotMatch(res.content[0].text, /Low confidence/);
+  assert.equal(fake.rechecks.length, 1);
+  assert.deepEqual(fake.rechecks[0].passages.map((x: any) => x.id), ['a0', 'a1', 'a2']);   // the top 3 only
+  assert.match(fake.rechecks[0].passages[1].text, /^the gains were made in only 18 days/);
+  assert.equal(fake.rechecks[0].user_id, USER);
+});
+
+test('confidence recheck: no answer in the passages either keeps the order and the flag', async () => {
+  lowScoredWithPassages();
+  fake.recheck = () => ({ a0: 0.3, a1: 0.5, a2: 0.2 });
+  const res = await searchKnowledge({ query: 'something the library does not hold', limit: 4 }, USER);
+  const data = (res.structuredContent as any).data as Array<any>;
+  assert.deepEqual(data.map(r => [r.id, r.relevance_score]), [['a0', 0.5], ['a1', 0.5], ['a2', 0.3], ['a3', 0.2]]);
+  assert.equal((res.structuredContent as any).confidence.low_confidence, true);
+  assert.match(res.content[0].text, /^\[Low confidence\]/);
+});
+
+test('confidence recheck is not made for a confident answer, fails open, and has a kill switch', async () => {
+  lowScoredWithPassages();
+  fake.rerank = () => ({ a0: 0.9, a1: 0.45, a2: 0.3, a3: 0.2 });
+  await searchKnowledge({ query: 'confident answer', limit: 4 }, USER);
+  assert.equal(fake.rechecks.length, 0);
+
+  fake.rerank = () => ({ a0: 0.5, a1: 0.45, a2: 0.3, a3: 0.2 });
+  fake.recheck = 'fail';
+  let res = await searchKnowledge({ query: 'recheck is down', limit: 4 }, USER);
+  assert.equal(fake.rechecks.length, 1);
+  assert.deepEqual(ids(res), ['a0', 'a1', 'a2', 'a3']);
+  assert.equal((res.structuredContent as any).confidence.low_confidence, true);
+
+  process.env.CONFIDENCE_RECHECK = 'off';
+  fake.recheck = () => ({ a0: 1, a1: 1, a2: 1 });
+  res = await searchKnowledge({ query: 'recheck switched off', limit: 4 }, USER);
+  assert.equal(fake.rechecks.length, 1);                                           // no second call
+  assert.equal((res.structuredContent as any).confidence.top_relevance, 0.5);
+});
+
+test('confidence recheck needs passages: rows without any are left as scored', async () => {
+  fake.adaptive = () => [row('a0', 0.9), row('a1', 0.8)];
+  fake.rerank = () => ({ a0: 0.5, a1: 0.45 });
+  const res = await searchKnowledge({ query: 'no passages anywhere', limit: 2 }, USER);
+  assert.equal(fake.rechecks.length, 0);
+  assert.equal((res.structuredContent as any).confidence.low_confidence, true);
 });
