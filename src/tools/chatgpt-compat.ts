@@ -11,6 +11,7 @@
  * ChatGPT only builds a citation when `url` is non-empty.
  */
 import { z } from 'zod';
+import { numArg } from '../lib/num-arg.js';
 import { searchKnowledge } from './search.js';
 import { getVideo } from './video.js';
 import { dbAdmin } from '../db/supabase.js';
@@ -28,8 +29,8 @@ export const FETCH_MAX_PAGE_CHARS = 100_000;
 export const chatgptFetchSchema = z.object({
   id: z.string().min(1).max(200).describe('Item id returned by the search tool.'),
   cursor: z.string().max(40).optional().describe('next_cursor from the previous page of this item (in metadata), to read on. Omit for the first page.'),
-  from_passage: z.number().int().min(0).max(100_000).optional().describe('Start reading the item text at this passage: the `n` of a search passage or a grep match. Omit to read from the top (summary first).'),
-  max_chars: z.number().int().min(2000).max(FETCH_MAX_PAGE_CHARS).default(FETCH_PAGE_CHARS).describe(`Characters of text per page (default ${FETCH_PAGE_CHARS}, max ${FETCH_MAX_PAGE_CHARS}).`),
+  from_passage: numArg(z.number().int().min(0).max(100_000)).optional().describe('Start reading the item text at this passage: the `n` of a search passage or a grep match. Omit to read from the top (summary first).'),
+  max_chars: numArg(z.number().int().min(2000).max(FETCH_MAX_PAGE_CHARS).default(FETCH_PAGE_CHARS)).describe(`Characters of text per page (default ${FETCH_PAGE_CHARS}, max ${FETCH_MAX_PAGE_CHARS}).`),
 });
 
 export const chatgptSearchOutputSchema = z.object({

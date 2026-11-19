@@ -10,6 +10,7 @@
  * Scoped to the caller's items; archived, adult, AI-excluded and taint-3 items are left out, as in search.
  */
 import { z } from 'zod';
+import { numArg } from '../lib/num-arg.js';
 import { dbAdmin } from '../db/supabase.js';
 import { shortQuote, timestampUrl } from '../lib/moments.js';
 import { itemUrl } from './chatgpt-compat.js';
@@ -27,7 +28,7 @@ export const grepSchema = z.object({
     'Only look inside this one item (an id from search or grep). Omit to search the whole library.'
   ),
   case_sensitive: z.boolean().default(false).describe('Match upper and lower case exactly (default false).'),
-  limit: z.number().int().min(1).max(GREP_MAX_LIMIT).default(GREP_DEFAULT_LIMIT).describe(
+  limit: numArg(z.number().int().min(1).max(GREP_MAX_LIMIT).default(GREP_DEFAULT_LIMIT)).describe(
     `Matching passages per page (default ${GREP_DEFAULT_LIMIT}, max ${GREP_MAX_LIMIT}).`
   ),
   cursor: z.string().max(40).optional().describe('next_cursor from the previous page, to get the next one.'),

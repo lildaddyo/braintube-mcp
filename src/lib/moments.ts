@@ -7,7 +7,9 @@ import { z } from 'zod';
 export const momentSchema = z.object({
   t: z.number(),        // start of the segment, whole seconds
   url: z.string(),      // source URL opening at t (YouTube: &t=<t>s)
-  quote: z.string(),    // the segment text, trimmed to a short quote
+  // The segment text, trimmed to a short quote. Left out when a returned passage of the same item already covers
+  // this second (payload, 2026-11-19): the passage holds the same words, the moment keeps its link.
+  quote: z.string().optional(),
 });
 export type Moment = z.infer<typeof momentSchema>;
 
@@ -66,7 +68,7 @@ export interface SegmentRow {
 }
 
 /** Best-first segment rows of ONE item -> up to MAX_MOMENTS moments (score floor, no two within MIN_GAP_SEC). */
-export function pickMoments(rows: SegmentRow[], url: string | null | undefined, videoId?: string | null): Moment[] {
+export function pickMoments(rows: SegmentRow[], url: string | null | undefined, videoId?: string | null, covered?: (row: SegmentRow, t: number) => boolean): Moment[] {
   const out: Moment[] = [];
   for (const r of rows) {
     if (out.length >= MAX_MOMENTS) break;
@@ -79,7 +81,7 @@ export function pickMoments(rows: SegmentRow[], url: string | null | undefined, 
     if (out.some(m => Math.abs(m.t - t) < MIN_GAP_SEC)) continue;
     const link = timestampUrl(url, t, videoId);
     if (!link) continue;
-    out.push({ t, url: link, quote: shortQuote(text) });
+    out.push(covered?.(r, t) ? { t, url: link } : { t, url: link, quote: shortQuote(text) });
   }
   return out;
 }
