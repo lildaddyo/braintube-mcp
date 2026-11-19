@@ -174,7 +174,8 @@ test('phrase-only hits join the pool, are hydrated owner- and adult-filtered, an
   const q = decodeURIComponent(hydrate[0].url);
   assert.match(q, /is_adult=eq\.false/);
   assert.match(q, new RegExp(`user_id=eq\\.${USER}`));
-  assert.match(q, /id=in\.\(p1\)/);                  // only the phrase-only id is hydrated
+  assert.match(q, /id=in\.\(p1,a4\)/);               // every hit is hydrated as soon as recall returns (in parallel)...
+  assert.equal(ids(res).filter(id => id === 'a4').length <= 1, true);   // ...but only the phrase-only one joins the pool
   // the whole pool (10 adaptive + 1 phrase-only) was scored in one call
   assert.equal(callsTo('/functions/v1/jev-rerank')[0].body.passages.length, 11);
 });
@@ -405,16 +406,24 @@ test('timed results carry moments from the segment search (scoped per item); oth
   const res = await searchKnowledge({ query: 'agent memory design', limit: 3 }, USER);
   const data = (res.structuredContent as any).data as Array<any>;
   assert.deepEqual(data.map(r => r.id), ['v1', 'w1', 'v2']);
+  // Both moments start where a returned passage starts, so they keep t and url but not the quote (the passage has the words).
   assert.deepEqual(data[0].moments, [
-    { t: 754, url: 'https://www.youtube.com/watch?v=abcDEF12345&t=754s', quote: 'memory is the agent state' },
-    { t: 1200, url: 'https://www.youtube.com/watch?v=abcDEF12345&t=1200s', quote: 'later point' },
+    { t: 754, url: 'https://www.youtube.com/watch?v=abcDEF12345&t=754s' },
+    { t: 1200, url: 'https://www.youtube.com/watch?v=abcDEF12345&t=1200s' },
   ]);
+  assert.ok(data[0].passages.some((p: any) => p.t === 754 && p.text.includes('memory is the agent state')));
   assert.equal('moments' in data[1], false);   // web row: no timed segments, no field
   assert.equal('moments' in data[2], false);   // video without matching segments: no field
   const seg = callsTo(SEG);
   assert.deepEqual(seg.filter(c => c.body.p_item_ids).map(c => c.body.p_item_ids).sort(), [['v1'], ['v2'], ['w1']]);   // every result is asked for passages
   assert.ok(seg.every(c => c.body.p_user_id === USER && c.body.p_mode === 'rrf'));
   assert.match(res.content[0].text, /watch\?v=abcDEF12345&t=754s/);
+  // Without passages the moments keep their quotes.
+  process.env.SEARCH_PASSAGES = 'off';
+  try {
+    const bare = (await searchKnowledge({ query: 'agent memory design moments only', limit: 3 }, USER)).structuredContent as any;
+    assert.deepEqual(bare.data[0].moments.map((m: any) => m.quote), ['memory is the agent state', 'later point']);
+  } finally { delete process.env.SEARCH_PASSAGES; }
 });
 
 test('every result carries passages: articles too, with position, and timed ones with t and url', async () => {
@@ -443,17 +452,17 @@ test('every result carries passages: articles too, with position, and timed ones
   assert.deepEqual(data[1].passages, [{ text: 'memory is the agent state', n: 31, t: 754, url: 'https://www.youtube.com/watch?v=abcDEF12345&t=754s' }]);
   assert.equal(data[1].moments.length, 1);
   assert.equal('passages' in data[2], false);   // an item with no segments: no field
-  // one lookup for the positions, one for the neighbours of the short picks
-  assert.equal(callsTo('/rest/v1/transcript_segments').length, 2);
+  // one position lookup per item with segments (each runs as soon as its segments are back), one for the neighbours
+  assert.equal(callsTo('/rest/v1/transcript_segments').length, 3);
 });
 
-test('passages: the top 3 results get up to 4, later ones 2; long text is cut at a word boundary', async () => {
+test('passages: the top 3 results get up to 4, later ones 1; long text is cut at a word boundary', async () => {
   fake.adaptive = () => Array.from({ length: 5 }, (_, i) => row(`a${i}`, 1 - i / 100));
   const many = (id: string) => Array.from({ length: 6 }, (_, k) => ({ segment_id: `${id}-${k}`, item_id: id, segment_text: `passage ${k} ${'word '.repeat(k === 0 ? 400 : 3)}`, start_time_sec: null, combined_score: 0.5 }));
   fake.segments = Object.fromEntries(['a0', 'a1', 'a2', 'a3', 'a4'].map(id => [id, many(id)]));
   const res = await searchKnowledge({ query: 'agent memory design', limit: 5 }, USER);
   const data = (res.structuredContent as any).data as Array<any>;
-  assert.deepEqual(data.map(r => r.passages.length), [4, 4, 4, 2, 2]);
+  assert.deepEqual(data.map(r => r.passages.length), [4, 4, 4, 1, 1]);
   assert.ok(data[0].passages[0].text.length <= 701 && data[0].passages[0].text.endsWith('…'));
 });
 

@@ -16,7 +16,10 @@ export type Passage = z.infer<typeof passageSchema>;
 
 /** Passages for the best-ranked results; later rows get fewer (they are rarely the answer, and every passage costs tokens). */
 export const MAX_PASSAGES = 4;
-export const MAX_PASSAGES_TAIL = 2;
+// Rows after the third: 1 passage (was 2 until 2026-11-19; the second one was almost never the answer, payload trim).
+export const MAX_PASSAGES_TAIL = 1;
+/** Passages cut from an item's stored text when it has no segments. */
+export const MAX_FALLBACK_PASSAGES = 2;
 export const FULL_PASSAGE_ROWS = 3;
 export const PASSAGE_CHARS = 700;
 
@@ -51,10 +54,11 @@ export function pickPassages(
   max: number = MAX_PASSAGES,
   indexById?: Map<string, number>,
   neighbours?: Neighbours,
+  coveredOut?: Set<number>,
 ): Passage[] {
   const out: Passage[] = [];
   const seen = new Set<string>();
-  const covered = new Set<number>();
+  const covered = coveredOut ?? new Set<number>();
   for (const r of rows) {
     if (out.length >= max) break;
     const raw = typeof r.segment_text === 'string' ? r.segment_text.trim() : '';
@@ -122,7 +126,7 @@ export function queryTerms(query: string): string[] {
  * the ones holding the most query words first. A text that fits one passage is returned whole. No position: these
  * windows are not segments, so they cannot be passed to fetch as from_passage.
  */
-export function fallbackPassages(text: string, query: string, max: number = MAX_PASSAGES_TAIL): Passage[] {
+export function fallbackPassages(text: string, query: string, max: number = MAX_FALLBACK_PASSAGES): Passage[] {
   const clean = text.replace(/\s+/g, ' ').trim();
   if (!clean || max <= 0) return [];
   if (clean.length <= PASSAGE_CHARS) return [{ text: shortQuote(clean, PASSAGE_CHARS) }];

@@ -124,3 +124,23 @@ test('knowledge_health reports the same item total as get_stats: adult-flagged i
   const plain = (await knowledgeHealth({}, USER)).structuredContent as Record<string, unknown>;
   assert.deepEqual(plain, { total_items: 40 });
 });
+
+test('capLists keeps at most 8 entities and key concepts per row and leaves short lists alone', async () => {
+  const { capLists, MAX_ROW_LIST } = await import('./search.js');
+  const long = Array.from({ length: 20 }, (_, i) => `e${i}`);
+  assert.equal(MAX_ROW_LIST, 8);
+  assert.deepEqual(capLists({ entities: long, key_concepts: long }), { entities: long.slice(0, 8), key_concepts: long.slice(0, 8) });
+  assert.deepEqual(capLists({ entities: ['a'], key_concepts: null }), {});
+});
+
+test('numeric fetch, grep and search arguments also arrive as whole-number strings (stale client schemas)', async () => {
+  const { chatgptFetchSchema } = await import('./chatgpt-compat.js');
+  const { grepSchema } = await import('./grep.js');
+  const { searchSchema } = await import('./search.js');
+  assert.deepEqual(chatgptFetchSchema.parse({ id: 'rcAyjg-oy84', from_passage: '196', max_chars: '2000' }), { id: 'rcAyjg-oy84', from_passage: 196, max_chars: 2000 });
+  assert.equal(chatgptFetchSchema.safeParse({ id: 'x', from_passage: 'abc' }).success, false);
+  assert.equal(chatgptFetchSchema.safeParse({ id: 'x', max_chars: '10' }).success, false);   // still range-checked
+  assert.equal(grepSchema.parse({ pattern: 'Bevy', limit: '3' }).limit, 3);
+  assert.equal(searchSchema.parse({ query: 'q', limit: '7' }).limit, 7);
+  assert.equal(searchSchema.parse({ query: 'q' }).limit, 5);
+});

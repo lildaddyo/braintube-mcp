@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { numArg } from '../lib/num-arg.js';
 import { dbAdmin, semanticSearch, adaptiveSearchRpc, incrementRetrievalStats, logMcpRetrieval } from '../db/supabase.js';
 import { generateEmbedding, translateQueryToEnglish } from '../lib/openai.js';
 import { rerankCache, hashKey, normaliseQuery } from '../lib/ttl-cache.js';
@@ -7,9 +8,10 @@ import { taintedListSchema, looseItemSchema } from '../schemas/output.js';
 import type { AdaptiveResult } from '../db/supabase.js';
 import { parseQueryFilter, queryTopic, applyFilterPrior, type QueryFilter } from '../lib/query-filter.js';
 import { pickMoments, TIMED_SOURCES, type Moment } from '../lib/moments.js';
-import { pickPassages, passageBudget, fallbackPassages, MIN_PASSAGE_CHARS, MAX_SPAN_SEGMENTS, type Passage, type PassageSegmentRow, type Neighbours } from '../lib/passages.js';
+import { pickPassages, passageBudget, fallbackPassages, MAX_FALLBACK_PASSAGES, MIN_PASSAGE_CHARS, MAX_SPAN_SEGMENTS, type Passage, type PassageSegmentRow, type Neighbours } from '../lib/passages.js';
 import { detectScript } from '../lib/script.js';
 import { lexicalRpc } from '../lib/lexical-nl.js';
+import { StageTimer } from '../lib/timing.js';
 
 async function logRetrieval(
   userId: string,
@@ -224,43 +226,55 @@ async function phraseRecall(embedding: number[], userId: string): Promise<string
   }
 }
 
-/** Phrase hits the adaptive search did not return, hydrated like adaptive_search rows (same columns), owner-checked. */
-async function hydratePhraseOnly(phraseIds: string[], adaptive: AdaptiveResult[], userId: string, strategy = 'phrase_recall', max = 10): Promise<AdaptiveResult[]> {
-  const have = new Set(adaptive.map(r => r.id));
-  const ids = phraseIds.filter(id => !have.has(id)).slice(0, max);
-  if (ids.length === 0) return [];
+// Latency, 2026-11-19: recall rows are now hydrated as soon as their recall call returns (in parallel with
+// adaptive_search), instead of one after the other once adaptive_search was done. newRecallRows then picks exactly the
+// rows the old one-by-one hydration picked (same filter, order and cap).
+type Hydrated = Map<string, Record<string, unknown>>;
+interface RecallRows<H> { hits: H[]; byId: Hydrated }
+
+async function hydrateRecall(ids: string[], userId: string): Promise<Hydrated> {
+  const byId: Hydrated = new Map();
+  const want = [...new Set(ids)];
+  if (want.length === 0) return byId;
   try {
     const { data, error } = await dbAdmin
       .from('items')
       .select('id, title, url, source_type, channel, summary, summary_oneliner, topic_primary, key_concepts, entities, tags, created_at').eq('is_adult', false)
-      .in('id', ids)
+      .in('id', want)
       .eq('user_id', userId)
       .abortSignal(AbortSignal.timeout(1500));
     if (error) {
-      console.error(`[phrase-recall] hydrate skipped: ${String(error.message).slice(0, 120)}`);
-      return [];
+      console.error(`[recall] hydrate skipped: ${String(error.message).slice(0, 120)}`);
+      return byId;
     }
-    const byId = new Map<string, Record<string, unknown>>();
-    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
-      if (typeof row.id === 'string') byId.set(row.id, row);
-    }
-    const rows: AdaptiveResult[] = [];
-    for (const id of ids) {                                   // keep the phrase RPC's order
-      const r = byId.get(id);
-      if (!r) continue;
-      rows.push({
-        id: r.id, title: r.title, url: r.url, source_type: r.source_type, channel: r.channel, summary: r.summary,
-        summary_oneliner: r.summary_oneliner, topic_primary: r.topic_primary, key_concepts: r.key_concepts, entities: r.entities,
-        tags: Array.isArray(r.tags) ? r.tags : [], created_at: r.created_at,
-        full_text_rank: null, semantic_rank: null, rrf_score: 0, strategy,
-      } as unknown as AdaptiveResult);
-    }
-    console.error(`[${strategy}] ${phraseIds.length} hits, ${ids.length} new, ${rows.length} hydrated`);
-    return rows;
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) if (typeof row.id === 'string') byId.set(row.id, row);
   } catch (err) {
-    console.error(`[phrase-recall] hydrate skipped: ${err instanceof Error ? err.name : 'error'}`);
-    return [];
+    console.error(`[recall] hydrate skipped: ${err instanceof Error ? err.name : 'error'}`);
   }
+  return byId;
+}
+
+function withRows<H>(p: Promise<H[]>, idOf: (h: H) => string, userId: string): Promise<RecallRows<H>> {
+  return p.then(async hits => ({ hits, byId: await hydrateRecall(hits.map(idOf), userId) }));
+}
+
+/** Recall hits the other lists did not return, as adaptive_search-shaped rows, in recall order, at most `max`. */
+function newRecallRows(hitIds: string[], have: AdaptiveResult[], byId: Hydrated, strategy: string, max: number): AdaptiveResult[] {
+  const seen = new Set(have.map(r => r.id));
+  const ids = hitIds.filter(id => !seen.has(id)).slice(0, max);
+  const rows: AdaptiveResult[] = [];
+  for (const id of ids) {
+    const r = byId.get(id);
+    if (!r) continue;
+    rows.push({
+      id: r.id, title: r.title, url: r.url, source_type: r.source_type, channel: r.channel, summary: r.summary,
+      summary_oneliner: r.summary_oneliner, topic_primary: r.topic_primary, key_concepts: r.key_concepts, entities: r.entities,
+      tags: Array.isArray(r.tags) ? r.tags : [], created_at: r.created_at,
+      full_text_rank: null, semantic_rank: null, rrf_score: 0, strategy,
+    } as unknown as AdaptiveResult);
+  }
+  if (hitIds.length) console.error(`[${strategy}] ${hitIds.length} hits, ${ids.length} new, ${rows.length} hydrated`);
+  return rows;
 }
 
 // -- Segment recall (retrieval gap vs Recall, 2026-11-19) ---------------------------------------------------------
@@ -448,26 +462,70 @@ async function itemTexts(ids: string[], userId: string): Promise<Map<string, str
   return out;
 }
 
+/** One item's segments (RPC order) and, when passages are on, each segment's position in the item. */
+export interface ItemSegments { raw: PassageSegmentRow[]; idx: Map<string, number> }
+
+const segIdOf = (s: PassageSegmentRow) => (typeof s.segment_id === 'string' ? s.segment_id : null);
+
+// Latency, 2026-11-19: each item's position lookup now runs as soon as that item's segments are back (it waited for
+// the slowest item before), and searchKnowledge starts these lookups for the likely results while the re-ranker runs
+// (prefetchSegments). Results are the same; only the order of the database calls changed.
+function itemSegmentsWithIndex(query: string, embedding: number[], userId: string, row: AdaptiveResult, limit: number, withIndex: boolean): Promise<ItemSegments> {
+  return itemSegments(query, embedding, userId, row, limit).then(async raw => ({
+    raw,
+    idx: withIndex ? await segmentIndexes(raw.map(segIdOf).filter((id): id is string => id !== null)) : new Map<string, number>(),
+  }));
+}
+
+const PREFETCH_ROWS = 6;
+
+/**
+ * Start the segment and position lookups of the rows most likely to be returned (the retriever's top rows, then the
+ * segment-recall rows), so attachPassages finds them done. Rows that end up not returned only cost a database call.
+ * Kill switch: PASSAGE_PREFETCH=off.
+ */
+export function prefetchSegments(query: string, embedding: number[], userId: string, candidates: AdaptiveResult[], max = PREFETCH_ROWS): Map<string, Promise<ItemSegments>> {
+  const out = new Map<string, Promise<ItemSegments>>();
+  if (process.env.PASSAGE_PREFETCH === 'off' || process.env.SEARCH_PASSAGES === 'off') return out;
+  for (const r of candidates) {
+    if (out.size >= max) break;
+    if (out.has(r.id)) continue;
+    const p = itemSegmentsWithIndex(query, embedding, userId, r, SEGMENT_ROWS, true);
+    p.catch(() => undefined);
+    out.set(r.id, p);
+  }
+  return out;
+}
+
 /** `perItem`: passages for every row (search inside one item); default: the rank-based budget of a result list. */
-export async function attachPassages<T extends AdaptiveResult>(query: string, embedding: number[], userId: string, rows: T[], perItem?: number): Promise<Array<T & { passages?: Passage[]; moments?: Moment[] }>> {
+export async function attachPassages<T extends AdaptiveResult>(query: string, embedding: number[], userId: string, rows: T[], perItem?: number, timer?: StageTimer, prefetched?: Map<string, Promise<ItemSegments>>): Promise<Array<T & { passages?: Passage[]; moments?: Moment[] }>> {
   const passagesOn = process.env.SEARCH_PASSAGES !== 'off';
   const momentsOn = process.env.SEARCH_MOMENTS !== 'off';
   const isTimed = (r: AdaptiveResult) => TIMED_SOURCES.has(String(r.source_type ?? ''));
   const wanted = rows.slice(0, PASSAGE_ITEMS).filter(r => passagesOn || (momentsOn && isTimed(r)));
   if (wanted.length === 0) return rows;
-  const raw = await Promise.all(wanted.map(r => itemSegments(query, embedding, userId, r, perItem ? Math.max(SEGMENT_ROWS, perItem * 2 + 4) : SEGMENT_ROWS)));
+  const tSeg = performance.now();
+  const limit = perItem ? Math.max(SEGMENT_ROWS, perItem * 2 + 4) : SEGMENT_ROWS;
+  let reused = 0;
+  const got = await Promise.all(wanted.map(r => {
+    const pre = !perItem ? prefetched?.get(r.id) : undefined;
+    if (pre) reused++;
+    return pre ?? itemSegmentsWithIndex(query, embedding, userId, r, limit, passagesOn);
+  }));
+  timer?.add('passages_segments', performance.now() - tSeg);
+  const raw = got.map(g => g.raw);
   const found = raw.map(byBothOrders);                                  // passage order
   const segs = new Map(wanted.map((r, i) => [r.id, found[i]]));
   const fusedSegs = new Map(wanted.map((r, i) => [r.id, byFusedScore(raw[i])]));   // moment order, as before
   const budget = new Map(rows.map((r, i) => [r.id, perItem ?? passageBudget(i)]));
-  const sid = (s: PassageSegmentRow) => (typeof s.segment_id === 'string' ? s.segment_id : null);
-  const indexById = passagesOn ? await segmentIndexes(found.flat().map(sid).filter((id): id is string => id !== null)) : new Map<string, number>();
+  const indexById = new Map<string, number>();
+  if (passagesOn) for (const g of got) for (const [k, v] of g.idx) indexById.set(k, v);
   // Short picks (within each item's budget) get their neighbours, so a fragment becomes a readable passage.
   const short: Array<{ itemId: string; n: number }> = [];
   if (passagesOn) {
     found.forEach((list, i) => {
       for (const s of list.slice(0, budget.get(wanted[i].id) ?? 0)) {
-        const id = sid(s);
+        const id = segIdOf(s);
         const n = id ? indexById.get(id) : undefined;
         if (n !== undefined && typeof s.segment_text === 'string' && s.segment_text.trim().length < MIN_PASSAGE_CHARS) short.push({ itemId: wanted[i].id, n });
       }
@@ -475,18 +533,28 @@ export async function attachPassages<T extends AdaptiveResult>(query: string, em
   }
   // Items with no segments at all (short notes, captions) still get a passage, cut from their own stored text.
   const bare = passagesOn ? wanted.filter((r, i) => found[i].length === 0).map(r => r.id) : [];
+  const tNb = performance.now();
   const [neighbours, texts] = await Promise.all([segmentNeighbours(short), itemTexts(bare, userId)]);
-  console.error(`[passages] ${found.filter(m => m.length > 0).length}/${wanted.length} results got segments, ${short.length} short picks widened, ${texts.size} from stored text`);
+  timer?.add('passages_neighbours', performance.now() - tNb);
+  console.error(`[passages] ${found.filter(m => m.length > 0).length}/${wanted.length} results got segments (${reused} prefetched of ${prefetched?.size ?? 0}), ${short.length} short picks widened, ${texts.size} from stored text`);
   return rows.map(r => {
     const list = segs.get(r.id);
     if (!list || list.length === 0) {
       const own = texts.get(r.id);
-      const passages = own ? fallbackPassages(own, query, Math.min(budget.get(r.id) ?? 0, 2)) : [];
+      const passages = own ? fallbackPassages(own, query, Math.min(budget.get(r.id) ?? 0, MAX_FALLBACK_PASSAGES)) : [];
       return passages.length > 0 ? { ...r, passages } : r;
     }
     const meta = r as AdaptiveResult & { url?: string | null; video_id?: string | null };
-    const passages = passagesOn ? pickPassages(list, meta.url, meta.video_id, budget.get(r.id), indexById, neighbours.get(r.id)) : [];
-    const moments = momentsOn && isTimed(r) ? pickMoments(fusedSegs.get(r.id) ?? list, meta.url, meta.video_id) : [];
+    const covered = new Set<number>();
+    const passages = passagesOn ? pickPassages(list, meta.url, meta.video_id, budget.get(r.id), indexById, neighbours.get(r.id), covered) : [];
+    // A moment whose segment sits inside a returned passage (or starts where one starts) keeps t and url, not its quote.
+    const passageStarts = new Set(passages.map(p => p.t).filter((t): t is number => typeof t === 'number'));
+    const isCovered = (s: PassageSegmentRow, t: number) => {
+      const id = segIdOf(s);
+      const n = id ? indexById.get(id) : undefined;
+      return (n !== undefined && covered.has(n)) || passageStarts.has(t);
+    };
+    const moments = momentsOn && isTimed(r) ? pickMoments(fusedSegs.get(r.id) ?? list, meta.url, meta.video_id, isCovered) : [];
     return { ...r, ...(passages.length > 0 ? { passages } : {}), ...(moments.length > 0 ? { moments } : {}) };
   });
 }
@@ -495,7 +563,7 @@ export const searchSchema = z.object({
   query: z.string().min(1).max(500).describe(
     'Natural language search query. Examples: "LLM security", "habit formation", "Andrew Huberman sleep", "AI agents"'
   ),
-  limit: z.number().int().min(1).max(20).default(5).describe(
+  limit: numArg(z.number().int().min(1).max(20).default(5)).describe(
     'Number of results to return (default 5, max 20). With item_id: number of passages.'
   ),
   item_id: z.string().min(1).max(200).optional().describe(
@@ -561,6 +629,15 @@ export function confidenceOf(rows: Array<{ relevance_score?: number | null }>): 
 // and relevance_score stay. SEARCH_RANK_FIELDS=on keeps them, for retrieval QA.
 const RANK_FIELDS = ['full_text_rank', 'semantic_rank', 'rrf_score', 'strategy', 'similarity'] as const;
 
+// entities and key_concepts: at most 8 per row (payload, 2026-11-19; some items carry 30+).
+export const MAX_ROW_LIST = 8;
+export function capLists(row: { entities?: unknown; key_concepts?: unknown }): { entities?: unknown; key_concepts?: unknown } {
+  const out: { entities?: unknown; key_concepts?: unknown } = {};
+  if (Array.isArray(row.entities) && row.entities.length > MAX_ROW_LIST) out.entities = row.entities.slice(0, MAX_ROW_LIST);
+  if (Array.isArray(row.key_concepts) && row.key_concepts.length > MAX_ROW_LIST) out.key_concepts = row.key_concepts.slice(0, MAX_ROW_LIST);
+  return out;
+}
+
 export function slimRow<T extends Record<string, unknown>>(row: T): Record<string, unknown> {
   if (process.env.SEARCH_RANK_FIELDS === 'on') return row;
   const out: Record<string, unknown> = { ...row };
@@ -595,10 +672,13 @@ export const searchKnowledgeOutputSchema = taintedListSchema(looseItemSchema).ex
     low_confidence: z.boolean(),
     threshold: z.number(),
   }).optional(),
+  // Server-side wall time in ms: total and the main stages (parallel stages overlap, so they need not add up).
+  timing_ms: z.record(z.string(), z.number()).optional(),
 });
 
 export async function searchKnowledge(input: z.infer<typeof searchSchema>, userId: string) {
   const { query, limit } = input;
+  const timer = new StageTimer();
   if (input.item_id) return searchInsideItem(query, input.item_id, limit, userId);
 
   const hasApiKey = !!process.env.OPENAI_API_KEY;
@@ -610,7 +690,7 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
   if (queryLongEnough && hasApiKey) {
     try {
       console.error('[search] generating 1536-dim 3-large query embedding for adaptive_search…');
-      const embedding = await generateEmbedding(query);
+      const embedding = await timer.time('embedding', () => generateEmbedding(query));
       console.error(`[search] embedding generated, dims=${embedding.length}`);
 
       // cc-rrk2: always retrieve a 10-row window for the JEV re-ranker, then trim to the caller's limit below.
@@ -622,11 +702,11 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
       // cc-rrk3: start phrase recall alongside adaptive_search (only when the JEV re-rank is on). Cross-lingual queries run it
       // on their English translation below (QA 2026-10-15b: the phrases are English).
       const phraseOn = rerankOn && process.env.PHRASE_RECALL !== 'off';
-      let phrasePromise = phraseOn && !crossLingual ? phraseRecall(embedding, userId) : null;
+      let phrasePromise = phraseOn && !crossLingual ? withRows(timer.time('phrase_recall_rpc', () => phraseRecall(embedding, userId)), id => id, userId) : null;
       // Segment recall runs the same way: alongside adaptive_search, on the English text for cross-lingual queries.
       const segmentOn = rerankOn && process.env.SEGMENT_RECALL !== 'off';
-      let segmentPromise = segmentOn && !crossLingual ? segmentRecall(query, embedding, userId) : null;
-      let results = await adaptiveSearchRpc(query, embedding, userId, fetchLimit);
+      let segmentPromise = segmentOn && !crossLingual ? withRows(timer.time('segment_recall_rpc', () => segmentRecall(query, embedding, userId)), h => h.id, userId) : null;
+      let results = await timer.time('retrieve', () => adaptiveSearchRpc(query, embedding, userId, fetchLimit));
       console.error(`[search] adaptive returned ${results.length} results`);
 
       // ── Cross-lingual (F3, 2026-09-25; every non-Latin script since 2026-10-24): the query also runs in English ──
@@ -634,16 +714,18 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
       let enQuery: string | null = null;
       let enEmbedding: number[] | null = null;
       if (crossLingual) {
+        const tXl = performance.now();
         const translated = await translateQueryToEnglish(query);
         if (translated) {
           console.error(`[search] cross-lingual (${xlScript}): "${translated.slice(0, 80)}"`);
           enQuery = translated;
           enEmbedding = await generateEmbedding(translated);
-          if (phraseOn) phrasePromise = phraseRecall(enEmbedding, userId);
-          if (segmentOn) segmentPromise = segmentRecall(translated, enEmbedding, userId);
+          if (phraseOn) phrasePromise = withRows(phraseRecall(enEmbedding, userId), id => id, userId);
+          if (segmentOn) segmentPromise = withRows(segmentRecall(translated, enEmbedding, userId), h => h.id, userId);
           const tResults = await adaptiveSearchRpc(translated, enEmbedding, userId, fetchLimit);
           results = mergeByBestScore(results, tResults, rerankOn ? Math.max(fetchLimit, 20) : fetchLimit);
         }
+        timer.add('cross_lingual', performance.now() - tXl);
       }
 
       // ── Date / source filter (QA 2026-10-15b) ──
@@ -668,33 +750,39 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
         // JEV re-rank of the top-10 window (cc-rrk1/rrk2), then trim to the caller's limit (kill switch JEV_RERANK=off).
         // cc-rrk3 + QA 2026-10-15b: the pool is adaptive top-10 (in order) + date/source window rows + the rest of the
         // original/English union + phrase-only rows (max 20), and the WHOLE pool is scored; rows outside the pool stay after it.
+        const tRecall = performance.now();
         const windowRows = windowPromise ? await windowPromise : [];
         const more = crossLingual && rerankOn ? results.slice(10, 20) : [];
-        const segmentHits = segmentPromise ? await segmentPromise : [];
-        const segmentOnly = segmentHits.length
-          ? await hydratePhraseOnly(segmentHits.map(h => h.id), [...results, ...windowRows], userId, 'segment_recall', SEGMENT_RECALL_ITEMS)
-          : [];
-        const phraseOnly = phrasePromise ? await hydratePhraseOnly(await phrasePromise, [...results, ...windowRows, ...segmentOnly], userId) : [];
+        const seg = segmentPromise ? await segmentPromise : null;
+        const segmentHits = seg?.hits ?? [];
+        const segmentOnly = seg ? newRecallRows(segmentHits.map(h => h.id), [...results, ...windowRows], seg.byId, 'segment_recall', SEGMENT_RECALL_ITEMS) : [];
+        const phrase = phrasePromise ? await phrasePromise : null;
+        const phraseOnly = phrase ? newRecallRows(phrase.hits, [...results, ...windowRows, ...segmentOnly], phrase.byId, 'phrase_recall', 10) : [];
         const extras = [...windowRows, ...more, ...segmentOnly, ...phraseOnly];
+        timer.add('recall', performance.now() - tRecall);
+        // The likely results' segments are looked up while the re-ranker runs (prefetchSegments).
+        const passageEmbedding = enEmbedding ?? embedding;
+        const prefetched = prefetchSegments(baseQuery, passageEmbedding, userId, [...results.slice(0, 4), ...segmentOnly.slice(0, 2), ...results.slice(4)], Math.min(limit + 1, PASSAGE_ITEMS));
         if (extras.length > 0) {
           const pool = [...results.slice(0, 10), ...extras].slice(0, 20);
           // A pool row with a matching segment is judged on that passage plus its summary (the summary alone may not hold the word).
           const segmentText = new Map(segmentHits.map(h => [h.id, h.text]));
-          const ranked = await jevRerank(rerankQuery, pool, 20, userId, segmentText);
+          const ranked = await timer.time('rerank', () => jevRerank(rerankQuery, pool, 20, userId, segmentText));
           const inPool = new Set(pool.map(r => r.id));
           // ranked === pool means jevRerank did nothing: fail open to exactly what the retriever returned (extra rows dropped)
           results = (ranked === pool ? results : [...applyFilterPrior(ranked, filter), ...results.filter(r => !inPool.has(r.id))]).slice(0, limit);
         } else {
-          const ranked = await jevRerank(rerankQuery, results, 10, userId);
+          const ranked = await timer.time('rerank', () => jevRerank(rerankQuery, results, 10, userId));
           results = (ranked === results ? results : [...applyFilterPrior(ranked.slice(0, 10), filter), ...ranked.slice(10)]).slice(0, limit);
         }
-        results = await attachPassages(baseQuery, enEmbedding ?? embedding, userId, results);
-        results = await recheckOnPassages(rerankQuery, results, userId);
+        results = await timer.time('passages', () => attachPassages(baseQuery, passageEmbedding, userId, results, undefined, timer, prefetched));
+        results = await timer.time('recheck', () => recheckOnPassages(rerankQuery, results, userId));
         const confidence = confidenceOf(results as Array<{ relevance_score?: number | null }>);
         const { rows: kept, omitted } = dropWeakRows(results as Array<AdaptiveResult & { relevance_score?: number | null }>);
         // match_type tells callers which retrieval path found the row; the other ranking internals are dropped (slimRow).
         const withMatchType = kept.map(r => slimRow({
           ...r,
+          ...capLists(r as { entities?: unknown; key_concepts?: unknown }),
           taint_level:      r.taint_level ?? 0,
           match_type:       r.strategy ?? 'adaptive',
         }));
@@ -702,10 +790,12 @@ export async function searchKnowledge(input: z.infer<typeof searchSchema>, userI
         const note = confidence?.low_confidence
           ? `[Low confidence] None of these results looks like a direct answer (top relevance ${confidence.top_relevance.toFixed(2)} < ${confidence.threshold}). Your library may not contain this.\n\n`
           : '';
+        const timing = timer.result();
+        console.error(`[search] timing ${JSON.stringify(timing)}`);
         const left = omitted > 0 ? `\n[${omitted} weaker result${omitted === 1 ? '' : 's'} left out (relevance under ${minRelevance()}).]` : '';
         return {
           content: [{ type: 'text' as const, text: note + formatTaintedResponse(tainted, true) + left }],
-          structuredContent: { ...tainted, ...(confidence ? { confidence } : {}), ...(omitted > 0 ? { omitted_low_relevance: omitted } : {}) } as unknown as Record<string, unknown>
+          structuredContent: { ...tainted, ...(confidence ? { confidence } : {}), ...(omitted > 0 ? { omitted_low_relevance: omitted } : {}), timing_ms: timing } as unknown as Record<string, unknown>
         };
       }
       console.error('[search] adaptive returned 0 results, falling back to keyword');
