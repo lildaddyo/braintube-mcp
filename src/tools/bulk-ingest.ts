@@ -3,6 +3,7 @@ import { findItemBySourceUrl, findItemByTitle, linkTags, countIngestsToday } fro
 import { insertItem, updateItemContent } from '../lib/ingest-gateway.js';
 import type { WriteChannel } from '../lib/ingest-gateway.js';
 import { embedItemsBatch } from './embedding.js';
+import { chargeIngestItem, refundIngest, INGEST_NO_CREDITS_MSG } from '../lib/ingest-credits.js';
 import { sourceTypeEnum } from '../schemas/source-types.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -74,6 +75,7 @@ export async function bulkIngest(
 
   // Items that would exceed the daily limit are skipped (not errored)
   let insertBudget = remaining;
+  let outOfCredits = false;
 
   for (const item of items) {
     try {
@@ -110,10 +112,29 @@ export async function bulkIngest(
           continue;
         }
 
-        const inserted = await insertItem(gw, {
-          source_type, title, summary, full_transcript: content, source_url: source_url ?? null, tags,
-          extra: { status: 'indexed' },
-        });
+        // Credits per new item (updates above are free); stop charging once the balance runs out.
+        if (outOfCredits) {
+          result.skipped++;
+          result.errors.push(`"${title}": ${INGEST_NO_CREDITS_MSG}`);
+          continue;
+        }
+        const charge = await chargeIngestItem(userId, content.length, { channel: channel.kind });
+        if (!charge.ok) {
+          outOfCredits = true;
+          result.skipped++;
+          result.errors.push(`"${title}": ${INGEST_NO_CREDITS_MSG}`);
+          continue;
+        }
+        let inserted;
+        try {
+          inserted = await insertItem(gw, {
+            source_type, title, summary, full_transcript: content, source_url: source_url ?? null, tags,
+            extra: { status: 'indexed' },
+          });
+        } catch (e) {
+          await refundIngest(charge.txIds, 'bulk_ingest: insert failed');
+          throw e;
+        }
         itemId = inserted.id;
         storedTags = inserted.tags;
         result.inserted++;
