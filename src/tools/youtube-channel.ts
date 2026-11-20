@@ -127,7 +127,7 @@ export async function listChannelVideos(input: z.infer<typeof listChannelVideosS
   };
   const lines = found.map((v, n) => `${n + 1}. ${v.title} (${v.published_at?.slice(0, 10) ?? '?'}) id=${v.id}${v.already_saved ? ' [already saved]' : ''}`);
   const more = pageToken ? `\nOlder uploads not scanned yet: call again with page_token="${pageToken}".` : '';
-  const text = `${(channel as any)?.title ?? 'Channel'}: ${found.length} matching video(s) out of ${scanned} scanned${total ? ` (channel has ${total})` : ''}. Listing is free; nothing was saved.\n${lines.join('\n')}${more}\n\nShow this list to the user and ask which to add, then call import_youtube_videos with their ids.`;
+  const text = `${(channel as any)?.title ?? 'Channel'}: ${found.length} matching video(s) out of ${scanned} scanned${total ? ` (channel has ${total})` : ''}. Listing is free; nothing was saved.\n${lines.join('\n')}${more}`;
   return { content: [{ type: 'text', text }], structuredContent: structured };
 }
 
@@ -157,7 +157,10 @@ export async function importYoutubeVideos(input: z.infer<typeof importYoutubeVid
 }
 
 export async function importStatus(input: z.infer<typeof importStatusSchema>, userId: string): Promise<ToolResult> {
-  const { status, data } = await callEdge('channel-import-run', userId, { action: input.action ?? 'status', userId, runId: input.run_id }, 60_000);
+  const { status, data: raw } = await callEdge('channel-import-run', userId, { action: input.action ?? 'status', userId, runId: input.run_id }, 60_000);
+  // status answers { runs: [...] } (filtered by runId); resume/pause/cancel answer { run }.
+  const runs = Array.isArray(raw?.runs) ? raw.runs : null;
+  const data = raw?.run || !runs ? raw : { ...raw, run: runs[0], error: raw?.error ?? (runs.length === 0 ? 'Import not found' : undefined) };
   if (status >= 400 || data?.error || !data?.run) return errorResult(`import_status failed: ${String(data?.error ?? data?.message ?? status)}`, { code: data?.code ?? null });
   return { content: [{ type: 'text', text: runText(data.run) }], structuredContent: { run: data.run } };
 }
