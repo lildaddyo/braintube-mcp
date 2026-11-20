@@ -45,19 +45,19 @@ const nonAdminTools = Object.entries(TOOL_ACCESS_MAP)
   .filter(([n, t]) => t !== 'admin' && !ROUTER_TOOLS.has(n))
   .map(([n]) => n);
 
-test('core profile registers 13 tools: the 11 core tools plus the 2 routers', async () => {
+test('core profile registers 15 tools: the 13 core tools plus the 2 routers', async () => {
   const names = await listNames('authenticated', 'core');
-  assert.equal(names.length, 13);
+  assert.equal(names.length, 15);
   assert.deepEqual(new Set(names), new Set([...CORE_TOOLS, ...ROUTER_TOOLS]));
   assert.ok(names.includes('search') && names.includes('fetch'), 'ChatGPT search/fetch pair stays');
 });
 
 test('full profile is unchanged: every tool the role allows, no router tools', async () => {
   const user = await listNames('authenticated', 'full');
-  assert.equal(user.length, 44);
+  assert.equal(user.length, 46);
   assert.deepEqual(new Set(user), new Set(nonAdminTools));
   const admin = await listNames('admin', 'full');
-  assert.equal(admin.length, 58);
+  assert.equal(admin.length, 60);
   for (const n of ROUTER_TOOLS) assert.ok(!admin.includes(n), n);
 });
 

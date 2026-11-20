@@ -84,6 +84,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolAnnotationEntry> = {
 
   // ── Read: export ──────────────────────────────────────────────────────────
   export_corpus:            read('Export Library'),
+  list_channel_videos:      read('List YouTube Channel Videos'),
   export_claude_md:         read('Export CLAUDE.md Context'),
 
   // ── Read: Brains (public Brains belong to other users → open world) ───────
@@ -101,6 +102,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolAnnotationEntry> = {
   // ── Write: ingest (dedup upserts can update an existing item) ─────────────
   ingest_content:           write('Save Content', true, true),
   bulk_ingest:              write('Bulk Save Content', true, true),
+  import_youtube_videos:    write('Import YouTube Videos', false, true, true),
   ingest_notion_page:       write('Import Notion Page', true, true, true),
   ingest_notion_database:   write('Import Notion Database', true, true, true),
   sync_readwise:            write('Sync Readwise Highlights', true, true, true),
