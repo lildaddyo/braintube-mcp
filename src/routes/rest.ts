@@ -23,7 +23,7 @@ import { searchBySource } from '../tools/search-by-source.js';
 import { searchByDate } from '../tools/search-by-date.js';
 import { randomResuface } from '../tools/resurface.js';
 import { assertBrainReachable, chatWithBrain, listBrains } from '../tools/brain-chat.js';
-import { requireFairUse } from '../lib/credits.js';
+import { requireFairUse, withChatHold } from '../lib/credits.js';
 
 export const restRouter = express.Router();
 
@@ -353,8 +353,8 @@ restRouter.post('/brain-chat/:slug', async (req, res) => {
   }
   try {
     await assertBrainReachable(brain_slug, auth(req).userId);
-    await requireFairUse(auth(req).userId, 'chat', 'ai_chat', 'chat_with_brain');
-    const result = await chatWithBrain({ brain_slug, question, chat_history, session_id }, auth(req).userId);
+    const hold = await requireFairUse(auth(req).userId, 'chat', 'ai_chat', 'chat_with_brain');
+    const result = await withChatHold(hold, 'chat_with_brain', () => chatWithBrain({ brain_slug, question, chat_history, session_id }, auth(req).userId));
     res.json(unwrap(result));
   } catch (e) { send500(res, e); }
 });

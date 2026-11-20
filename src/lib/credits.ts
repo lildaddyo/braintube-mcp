@@ -101,7 +101,7 @@ export async function requireFairUse(
   metric: FairUseMetric,
   action: CreditAction,
   toolName: string
-): Promise<void> {
+): Promise<{ transactionId?: string }> {
   const { data, error } = await dbAdmin.rpc('consume_fair_use', {
     p_user_id: userId,
     p_metric: metric,
@@ -118,7 +118,7 @@ export async function requireFairUse(
 
   const result = data as {
     success: boolean; charged?: boolean; used?: number; allowance?: number;
-    period?: string; balance?: number; error?: string;
+    period?: string; balance?: number; error?: string; transaction_id?: string;
   } | null;
 
   if (!result?.success) {
@@ -135,4 +135,43 @@ export async function requireFairUse(
       ? `[credits] ${toolName} past fair use, charged ${action} (user=${userId}, balance=${result.balance ?? '?'})`
       : `[credits] ${toolName} free (${metric} ${result.used}/${result.allowance} this ${result.period}, user=${userId})`
   );
+  return { transactionId: result.charged ? result.transaction_id : undefined };
+}
+
+// ── Variable chat pricing (Spuck 2026-11-20, "Copilot-style"); mirrors dark-n-cozy _shared/credit-guard.ts ──
+// Past the free allowance consume_fair_use holds up to 3 credits; settle by answer length x model weight.
+export function chatAnswerCredits(answer: string | null | undefined, weight = 1): number {
+  const outTokens = Math.ceil((answer?.length ?? 0) / 4);
+  const tier = outTokens <= 400 ? 1 : outTokens <= 1500 ? 2 : 3;
+  return Math.min(6, tier * weight);
+}
+
+/** Charges the delivered answer's price out of a hold and refunds the rest (empty answer = full refund). Never throws. */
+export async function settleChatHold(transactionId: string | undefined, answer: string | null | undefined, toolName: string): Promise<void> {
+  if (!transactionId) return;
+  const final = answer && answer.trim() ? chatAnswerCredits(answer) : 0;
+  try {
+    const { error } = await dbAdmin.rpc('settle_credits', {
+      p_transaction_id: transactionId, p_final: final,
+      p_reason: `${toolName}: answer ${answer?.length ?? 0} chars`,
+    });
+    if (error) console.error(`[credits] settle_credits error for ${toolName}:`, error.message);
+  } catch (e) {
+    console.error(`[credits] settle_credits error for ${toolName}:`, e);
+  }
+}
+
+/** Runs a chat tool under a fair-use hold: settles from the answer, refunds in full if it throws. */
+export async function withChatHold<T>(hold: { transactionId?: string }, toolName: string, run: () => Promise<T>): Promise<T> {
+  let out: T;
+  try {
+    out = await run();
+  } catch (e) {
+    await settleChatHold(hold.transactionId, '', toolName);
+    throw e;
+  }
+  const r = out as { isError?: boolean; structuredContent?: { answer?: unknown } } | undefined;
+  const answer = !r?.isError && typeof r?.structuredContent?.answer === 'string' ? r.structuredContent.answer : '';
+  await settleChatHold(hold.transactionId, answer, toolName);
+  return out;
 }

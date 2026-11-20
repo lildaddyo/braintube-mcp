@@ -81,7 +81,7 @@ import type { ToolProfile } from './tool-profiles.js';
 import { RETRIEVAL_DESCRIPTIONS, SERVER_INSTRUCTIONS } from './tool-descriptions.js';
 import { TOOL_ANNOTATIONS } from './tool-annotations.js';
 import type { ShortCircuitStatus } from './security/tool-envelope.js';
-import { requireCredits, requireFairUse } from './lib/credits.js';
+import { requireCredits, requireFairUse, withChatHold } from './lib/credits.js';
 import { dbAdmin } from './db/supabase.js';
 import { detectInjection, logInjectionAttempt } from './security/injection.js';
 import { HUMAN_CONFIRM_REQUIRED, requestHumanConfirmation } from './security/human-confirm.js';
@@ -784,7 +784,7 @@ export function buildMcpServer(
   server.registerTool(
     'bulk_ingest',
     {
-      description: 'Ingest up to 50 items in a single call. Each item is deduplicated (source_url → title fallback), inserted or updated, then embedded in batches of 20. Daily limit: 500 new items per user. Returns { inserted, updated, skipped, errors[] }.',
+      description: 'Ingest up to 50 items in a single call. Each item is deduplicated (source_url → title fallback), inserted or updated, then embedded in batches of 20. Daily limit: 500 new items per user. New items use credits (the Free plan includes a small monthly allowance); updates to items already in the library are free. Returns { inserted, updated, skipped, errors[] }.',
       inputSchema: bulkIngestSchema,
       outputSchema: bulkIngestOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true }
@@ -930,8 +930,8 @@ export function buildMcpServer(
     },
     async (input) => {
       await assertBrainReachable(input.brain_slug, auth.userId);
-      await requireFairUse(auth.userId, 'chat', 'ai_chat', 'chat_with_brain');
-      return chatWithBrain(input, auth.userId);
+      const hold = await requireFairUse(auth.userId, 'chat', 'ai_chat', 'chat_with_brain');
+      return withChatHold(hold, 'chat_with_brain', () => chatWithBrain(input, auth.userId));
     }
   );
 
