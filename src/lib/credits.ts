@@ -161,6 +161,18 @@ export async function settleChatHold(transactionId: string | undefined, answer: 
   }
 }
 
+/**
+ * The answer text the model wrote, without the untrusted_content safety envelope the
+ * MCP wraps around it (~400 chars of notice + tags), so pricing measures only the answer.
+ */
+export function answerBody(answer: string): string {
+  const open = answer.match(/<untrusted_content[^>]*>/);
+  if (!open || open.index === undefined) return answer;
+  const start = open.index + open[0].length;
+  const end = answer.indexOf('</untrusted_content', start);
+  return (end === -1 ? answer.slice(start) : answer.slice(start, end)).trim();
+}
+
 /** Runs a chat tool under a fair-use hold: settles from the answer, refunds in full if it throws. */
 export async function withChatHold<T>(hold: { transactionId?: string }, toolName: string, run: () => Promise<T>): Promise<T> {
   let out: T;
@@ -172,6 +184,6 @@ export async function withChatHold<T>(hold: { transactionId?: string }, toolName
   }
   const r = out as { isError?: boolean; structuredContent?: { answer?: unknown } } | undefined;
   const answer = !r?.isError && typeof r?.structuredContent?.answer === 'string' ? r.structuredContent.answer : '';
-  await settleChatHold(hold.transactionId, answer, toolName);
+  await settleChatHold(hold.transactionId, answerBody(answer), toolName);
   return out;
 }
