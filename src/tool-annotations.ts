@@ -103,6 +103,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolAnnotationEntry> = {
   ingest_content:           write('Save Content', true, true),
   bulk_ingest:              write('Bulk Save Content', true, true),
   import_youtube_videos:    write('Import YouTube Videos', false, true, true),
+  import_status:            write('YouTube Import Status', false, true, true),
   ingest_notion_page:       write('Import Notion Page', true, true, true),
   ingest_notion_database:   write('Import Notion Database', true, true, true),
   sync_readwise:            write('Sync Readwise Highlights', true, true, true),

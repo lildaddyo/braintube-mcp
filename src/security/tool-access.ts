@@ -94,6 +94,7 @@ export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   bulk_ingest:            'authenticated',
   list_channel_videos:    'authenticated',
   import_youtube_videos:  'authenticated',
+  import_status:          'authenticated',
   ingest_notion_page:     'authenticated',
   compile_knowledge:      'authenticated',
   set_notion_api_key:     'authenticated',

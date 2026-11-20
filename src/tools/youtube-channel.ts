@@ -15,7 +15,7 @@ import { actingUserHeaders } from '../lib/edge-auth.js';
 const FN_BASE = 'https://iqjnmmtvhyavgrsxpoao.supabase.co/functions/v1';
 const MAX_MATCHES = 50;
 const MAX_EDGE_CALLS = 15;           // 15 × 200 = up to 3,000 newest uploads scanned per call
-const IMPORT_MAX = 50;
+const IMPORT_MAX = 500;
 
 export const listChannelVideosSchema = z.object({
   channel_url: z.string().min(1).max(500).describe(
@@ -26,6 +26,7 @@ export const listChannelVideosSchema = z.object({
   ),
   limit: z.number().int().min(1).max(MAX_MATCHES).default(MAX_MATCHES).describe(`Max videos returned (1-${MAX_MATCHES}).`),
   page_token: z.string().max(200).optional().describe('next_page_token from a previous call, to scan older uploads.'),
+  include_shorts: z.boolean().default(false).describe('Include YouTube Shorts (default false: Shorts are left out).'),
 });
 
 export const listChannelVideosOutputSchema = z.object({}).passthrough();
@@ -34,6 +35,12 @@ export const importYoutubeVideosSchema = z.object({
   video_ids: z.array(z.string().regex(/^[a-zA-Z0-9_-]{11}$/)).min(1).max(IMPORT_MAX).describe(
     `YouTube video ids to add (the "id" values from list_channel_videos), max ${IMPORT_MAX} per call.`,
   ),
+  confirmed: z.boolean().default(false).describe('Set true only after the user said yes to the confirm_required message of a previous call.'),
+});
+
+export const importStatusSchema = z.object({
+  run_id: z.string().uuid().describe('run.id returned by import_youtube_videos.'),
+  action: z.enum(['status', 'resume', 'pause', 'cancel']).default('status').describe('status (default), or resume / pause / cancel the import run.'),
 });
 
 export const importYoutubeVideosOutputSchema = z.object({}).passthrough();
@@ -92,6 +99,7 @@ export async function listChannelVideos(input: z.infer<typeof listChannelVideosS
     for (const v of videos) {
       if (found.length >= limit) break;
       const title = String(v.title ?? '');
+      if (v.isShort && !input.include_shorts) continue;
       if (!matches(title)) continue;
       const id = String(v.videoId ?? v.id ?? '');
       if (!id) continue;
@@ -123,13 +131,30 @@ export async function listChannelVideos(input: z.infer<typeof listChannelVideosS
   return { content: [{ type: 'text', text }], structuredContent: structured };
 }
 
+function runText(run: any): string {
+  const parts = [`Import run ${run?.id ?? '?'}: ${run?.status ?? '?'}, ${run?.imported ?? 0} of ${run?.total ?? '?'} added`];
+  if (run?.remaining) parts.push(`${run.remaining} still to add (it keeps going in the background; check with import_status)`);
+  return parts.join(', ') + '.' + (run?.message ? `\n${run.message}` : '');
+}
+
 export async function importYoutubeVideos(input: z.infer<typeof importYoutubeVideosSchema>, userId: string): Promise<ToolResult> {
   const ids = [...new Set(input.video_ids)];
-  const { status, data } = await callEdge('youtube-bulk-import', userId, { videoIds: ids, source: 'mcp' }, 120_000);
-  if (status >= 400 || (data?.error && !('imported' in (data ?? {})))) {
-    return errorResult(`Import failed: ${String(data?.error ?? status)}`, { code: data?.code ?? null, ...data });
+  const { status, data } = await callEdge('channel-import-run', userId,
+    { action: 'start', userId, videoIds: ids, confirmed: input.confirmed === true, source: 'mcp' }, 120_000);
+  if (data?.code === 'confirm_required') {
+    const text = `${data.message ?? "This import may use all of the user's credits."}\nNothing was added yet. Ask the user to confirm; if they say yes, call import_youtube_videos again with the same video_ids and confirmed=true.`;
+    return { content: [{ type: 'text', text }], structuredContent: { code: 'confirm_required', requested: ids.length, message: data.message ?? null } };
   }
-  const message = data?.message ? `\n${data.message}` : '';
-  const text = `Imported ${data?.imported ?? 0} of ${ids.length} video(s) into BrainTube (skipped ${data?.skipped ?? 0}: already saved or excluded). Transcripts and summaries finish processing in the background.${message}`;
-  return { content: [{ type: 'text', text }], structuredContent: { requested: ids.length, ...data } };
+  if (status >= 400 || data?.error || !data?.run) {
+    return errorResult(`Import failed: ${String(data?.error ?? data?.message ?? status)}`, { code: data?.code ?? null });
+  }
+  return { content: [{ type: 'text', text: runText(data.run) }], structuredContent: { requested: ids.length, run: data.run } };
 }
+
+export async function importStatus(input: z.infer<typeof importStatusSchema>, userId: string): Promise<ToolResult> {
+  const { status, data } = await callEdge('channel-import-run', userId, { action: input.action ?? 'status', userId, runId: input.run_id }, 60_000);
+  if (status >= 400 || data?.error || !data?.run) return errorResult(`import_status failed: ${String(data?.error ?? data?.message ?? status)}`, { code: data?.code ?? null });
+  return { content: [{ type: 'text', text: runText(data.run) }], structuredContent: { run: data.run } };
+}
+
+export const importStatusOutputSchema = z.object({}).passthrough();

@@ -46,7 +46,7 @@ import { knowledgeGraphSchema, getKnowledgeGraphOutputSchema } from '../tools/kn
 import { knowledgeHealthSchema, knowledgeHealthOutputSchema } from '../tools/knowledge-health.js';
 import { knowledgeIndexSchema, getKnowledgeIndexOutputSchema } from '../tools/knowledge-index.js';
 import { compileKnowledgeSchema, compileKnowledgeOutputSchema, getConceptArticlesSchema, getConceptArticlesOutputSchema } from '../tools/concept-articles.js';
-import { listChannelVideosSchema, listChannelVideos, listChannelVideosOutputSchema, importYoutubeVideosSchema, importYoutubeVideos, importYoutubeVideosOutputSchema } from '../tools/youtube-channel.js';
+import { listChannelVideosSchema, listChannelVideos, listChannelVideosOutputSchema, importYoutubeVideosSchema, importYoutubeVideos, importYoutubeVideosOutputSchema, importStatusSchema, importStatusOutputSchema } from '../tools/youtube-channel.js';
 import { exportCorpusSchema, exportCorpusOutputSchema } from '../tools/export-corpus.js';
 import {
   tagCooccurrenceSchema, tagCooccurrenceOutputSchema,
@@ -292,9 +292,16 @@ const CARD_TOOLS = [
   },
   {
     name: 'import_youtube_videos',
-    description: 'Add selected YouTube videos to BrainTube with transcripts (same import and credits as the app).',
+    description: 'Add selected YouTube videos to BrainTube with transcripts ; confirm step for large imports.',
     inputSchema: toInputSchema(importYoutubeVideosSchema),
     outputSchema: toOutputSchema(importYoutubeVideosOutputSchema),
+    annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
+  },
+  {
+    name: 'import_status',
+    description: 'Check, resume, pause or cancel a YouTube import run.',
+    inputSchema: toInputSchema(importStatusSchema),
+    outputSchema: toOutputSchema(importStatusOutputSchema),
     annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
   },
   {
