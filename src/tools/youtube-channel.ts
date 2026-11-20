@@ -133,7 +133,12 @@ export async function listChannelVideos(input: z.infer<typeof listChannelVideosS
 
 function runText(run: any): string {
   const parts = [`Import run ${run?.id ?? '?'}: ${run?.status ?? '?'}, ${run?.imported ?? 0} of ${run?.total ?? '?'} added`];
-  if (run?.remaining) parts.push(`${run.remaining} still to add (it keeps going in the background; check with import_status)`);
+  if (run?.remaining) {
+    const live = run?.status === 'running';
+    parts.push(live
+      ? `${run.remaining} still to add (it keeps going in the background; check with import_status)`
+      : `${run.remaining} not added`);
+  }
   return parts.join(', ') + '.' + (run?.message ? `\n${run.message}` : '');
 }
 
