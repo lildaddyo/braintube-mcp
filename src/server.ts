@@ -38,7 +38,7 @@ import { knowledgeGraphSchema, getKnowledgeGraph, getKnowledgeGraphOutputSchema 
 import { knowledgeHealthSchema, knowledgeHealth, knowledgeHealthOutputSchema } from './tools/knowledge-health.js';
 import { knowledgeIndexSchema, getKnowledgeIndex, getKnowledgeIndexOutputSchema } from './tools/knowledge-index.js';
 import { compileKnowledgeSchema, compileKnowledge, compileKnowledgeOutputSchema, getConceptArticlesSchema, getConceptArticles, getConceptArticlesOutputSchema } from './tools/concept-articles.js';
-import { listChannelVideosSchema, listChannelVideos, listChannelVideosOutputSchema, importYoutubeVideosSchema, importYoutubeVideos, importYoutubeVideosOutputSchema } from './tools/youtube-channel.js';
+import { listChannelVideosSchema, listChannelVideos, listChannelVideosOutputSchema, importYoutubeVideosSchema, importYoutubeVideos, importYoutubeVideosOutputSchema, importStatusSchema, importStatus, importStatusOutputSchema } from './tools/youtube-channel.js';
 import { exportCorpusSchema, exportCorpus, exportCorpusOutputSchema } from './tools/export-corpus.js';
 import {
   tagCooccurrenceSchema, tagCooccurrence, tagCooccurrenceOutputSchema,
@@ -995,12 +995,23 @@ export function buildMcpServer(
   server.registerTool(
     'import_youtube_videos',
     {
-      description: 'Step 2: add selected YouTube videos (ids from list_channel_videos, max 50 per call) to BrainTube with full transcripts and summaries, the same import as the app. Costs credits on paid plans (per new video; Free plans get one channel import a month). Always confirm the list and count with the user before calling. Already-saved videos are skipped and not charged.',
+      description: "Step 2: add the YouTube videos the user picked (ids from list_channel_videos, up to 500) to BrainTube with full transcripts and summaries, the same import as the app; it uses the user's credits. Confirm the list with the user first. If the result says confirm_required, ask the user and call again with confirmed=true. Large imports continue in the background: follow them with import_status.",
       inputSchema: importYoutubeVideosSchema,
       outputSchema: importYoutubeVideosOutputSchema,
       annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true }
     },
     (input) => importYoutubeVideos(input, auth.userId)
+  );
+
+  server.registerTool(
+    'import_status',
+    {
+      description: 'Check a YouTube import started by import_youtube_videos (how many added, how many left, paused when credits ran out), or resume, pause or cancel it.',
+      inputSchema: importStatusSchema,
+      outputSchema: importStatusOutputSchema,
+      annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true }
+    },
+    (input) => importStatus(input, auth.userId)
   );
 
   server.registerTool(
