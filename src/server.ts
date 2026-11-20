@@ -38,6 +38,7 @@ import { knowledgeGraphSchema, getKnowledgeGraph, getKnowledgeGraphOutputSchema 
 import { knowledgeHealthSchema, knowledgeHealth, knowledgeHealthOutputSchema } from './tools/knowledge-health.js';
 import { knowledgeIndexSchema, getKnowledgeIndex, getKnowledgeIndexOutputSchema } from './tools/knowledge-index.js';
 import { compileKnowledgeSchema, compileKnowledge, compileKnowledgeOutputSchema, getConceptArticlesSchema, getConceptArticles, getConceptArticlesOutputSchema } from './tools/concept-articles.js';
+import { listChannelVideosSchema, listChannelVideos, listChannelVideosOutputSchema, importYoutubeVideosSchema, importYoutubeVideos, importYoutubeVideosOutputSchema } from './tools/youtube-channel.js';
 import { exportCorpusSchema, exportCorpus, exportCorpusOutputSchema } from './tools/export-corpus.js';
 import {
   tagCooccurrenceSchema, tagCooccurrence, tagCooccurrenceOutputSchema,
@@ -978,6 +979,28 @@ export function buildMcpServer(
       annotations: { readOnlyHint: true, openWorldHint: false }
     },
     (input) => getKnowledgeIndex(input, auth.userId)
+  );
+
+  server.registerTool(
+    'list_channel_videos',
+    {
+      description: "Step 1 of adding a YouTube channel's videos: list or search a channel's uploads by title (e.g. every episode with a guest) WITHOUT saving anything. Free. Uses the user's own YouTube connection (connected once in the BrainTube app). Returns up to 50 matches with id, title, date and whether each is already saved. Show the list to the user, ask which to add, then call import_youtube_videos with those ids.",
+      inputSchema: listChannelVideosSchema,
+      outputSchema: listChannelVideosOutputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: true }
+    },
+    (input) => listChannelVideos(input, auth.userId)
+  );
+
+  server.registerTool(
+    'import_youtube_videos',
+    {
+      description: 'Step 2: add selected YouTube videos (ids from list_channel_videos, max 50 per call) to BrainTube with full transcripts and summaries, the same import as the app. Costs credits on paid plans (per new video; Free plans get one channel import a month). Always confirm the list and count with the user before calling. Already-saved videos are skipped and not charged.',
+      inputSchema: importYoutubeVideosSchema,
+      outputSchema: importYoutubeVideosOutputSchema,
+      annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true }
+    },
+    (input) => importYoutubeVideos(input, auth.userId)
   );
 
   server.registerTool(

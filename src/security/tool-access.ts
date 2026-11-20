@@ -92,6 +92,8 @@ export const TOOL_ACCESS_MAP: Record<string, ToolTier> = {
   // per call and 500 new items per user per day, and needs the person to approve it
   // (MCP elicitation, src/security/human-confirm.ts).
   bulk_ingest:            'authenticated',
+  list_channel_videos:    'authenticated',
+  import_youtube_videos:  'authenticated',
   ingest_notion_page:     'authenticated',
   compile_knowledge:      'authenticated',
   set_notion_api_key:     'authenticated',
