@@ -1,0 +1,13 @@
+name: no-source
+# This public repository must never contain server source. Fails if code files appear.
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          bad=$(git ls-files | grep -Ev '^(README\.md|SECURITY\.md|LICENSE|server\.json|docs/[^/]+\.md|\.github/workflows/no-source\.yml)$' || true)
+          if [ -n "$bad" ]; then echo "Files not allowed in the public listing repo:"; echo "$bad"; exit 1; fi
